@@ -32,7 +32,7 @@ doric.app(..., 'Visible', false) % hidden windows (tests, scripted checks)
 │ Selected channels: [Apply] [Start] [Stop]  [✓] Live intensity       │
 │ [Advanced settings...]   <last error, in red>        [ STOP ALL ]   │
 ├─────────────────────────────────────────────────────────────────────┤
-│ 18:34:25.349  Library (info): LEDFLS_465_465 (Port #5)              │
+│ 18:34:25.349  Library (info): LED Driver (Port #4)                  │
 │ 18:34:25.394  State: Initialising -> Opening                        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -59,10 +59,14 @@ protocol prepared.
   row's mode and intensity stay individually editable, so the channels can differ.
 - **Mode** lists every vendor mode (Off, CW, ExtTTL, ExtAnalog, Square, Complex, Custom). A mode
   whose timing or sequence fields matter (Square, Complex, Custom, or any triggered/gated use)
-  shows the hint *"see Advanced settings"*; nothing is locked.
+  shows the hint *"see Advanced settings"*; nothing is locked. In **ExtAnalog** the current comes
+  from the BNC voltage at 400 mA/V, so neither the intensity box nor `MaxCurrentmA` constrains it;
+  the analog source itself must stay at or below 2.5 V (`vendor-dll.md` §10).
 - **Intensity** slider plus numeric box, in mA. The slider's range follows the channel's
-  `MaxCurrentmA`; the box accepts 0–65535 and a value above the limit is refused by the API with
-  an explicit message (never clamped). With *Live intensity* on and the channel running, changes
+  `MaxCurrentmA`; the box stops at 1000 mA, the LED's rated maximum
+  (`doric.Channel.DeviceMaxCurrentmA`), so an over-rating value cannot be typed at all, and a
+  value above the channel's own `MaxCurrentmA` is refused by the API with an explicit message
+  (never clamped). With *Live intensity* on and the channel running, changes
   call `setCurrent` (`ls_send_current`), throttled to about 10 Hz while dragging, with the final
   value always sent on release. With it off, intensity is sent on *Apply*.
 - **Start** applies pending settings first when they differ from the commanded ones, and waits for
@@ -143,5 +147,11 @@ controls the way a user would (set `Value`, then invoke the callback) and assert
 and disconnect, Apply/Start/Stop following the selection, live intensity, STOP ALL and Esc,
 over-current refusal, fault display, advanced-window synchronisation, invalid values, presets,
 complex-table editing, custom import, the limits tab and save/load. Ownership is covered too: an
-owning window disconnects on close, an attached one does not. The operator walk-through at the rig
-is recorded in `rig-checks.md`.
+owning window disconnects on close, an attached one does not.
+
+On 2026-09-17 the main window was driven the same way against the **real device**: the defaults,
+Connect (device `LED Driver` on port 4), Apply, Start on both channels, a live 30 → 80 mA change
+while running, STOP ALL, starting one channel with the other deselected, an over-limit Apply
+refused in the status line with nothing sent, and closing the window with a channel running (which
+stops all, closes and quits). Esc, the *Advanced settings…* pop-up and the file dialogs still want
+a human at the rig; both are recorded in `rig-checks.md`.

@@ -6,9 +6,17 @@ classdef Channel < handle
 %   Properties
 %       Index               1 or 2 (read-only)
 %       Settings            pending doric.ChannelSettings (settable; not sent until apply)
-%       MaxCurrentmA        user limit in mA (settable, default 2000). Requests above it error
-%                           doric:Channel:overCurrent; lowering it below the commanded current
-%                           errors doric:Channel:limitBelowCommanded. Nothing is clamped.
+%       MaxCurrentmA        user limit in mA (settable, default RecommendedMaxCurrentmA = 700).
+%                           Requests above it error doric:Channel:overCurrent; lowering it below
+%                           the commanded current errors doric:Channel:limitBelowCommanded;
+%                           raising it above DeviceMaxCurrentmA errors
+%                           doric:Channel:aboveDeviceLimit. Nothing is clamped.
+%       DeviceMaxCurrentmA  1000 mA, constant. The rated maximum of the 465 nm LED head, from
+%                           Doric's LED Light Source manual (see below). No API or GUI path can
+%                           command more.
+%       RecommendedMaxCurrentmA
+%                           700 mA, constant. Doric's recommended operating current for a
+%                           1000 mA LED, and the default of MaxCurrentmA.
 %       CommandedSettings   last settings the device acknowledged, [] before any
 %       CommandedCurrentmA  last current acknowledged (via settings or setCurrent), [] before
 %       IsRunning           commanded running flag
@@ -31,9 +39,20 @@ classdef Channel < handle
 %   Errors
 %       doric:LightSource:notReady      not connected
 %       doric:Channel:overCurrent       a current above MaxCurrentmA
+%       doric:Channel:aboveDeviceLimit  a MaxCurrentmA above DeviceMaxCurrentmA
 %       doric:Channel:invalidSettings   not a doric.ChannelSettings
 %       doric:Channel:libraryError      the library reported an error (Wait true)
 %       doric:Channel:timeout / bridgeExited / <bridge error code>
+%
+%   Current limits (Doric LED Light Source user manual V2.1.1, table 5.8 "Typical Connectorized
+%   LED, LEDFRJ1 and LEDFLS Output Power", and table 5.2 "General Specifications for
+%   Connectorized LEDs"): a 465 nm head is rated **1000 mA maximum**, and Doric recommends
+%   **700 mA** for LEDs whose maximum is 1000 mA. The driver itself would deliver up to 2000 mA
+%   (its "Overdrive @2000 mA (pulsed)" column). The manual's own warning, in capitals: overdrive
+%   "allows the system to exceed the normal safe current limit of the light source. THIS SHOULD
+%   ONLY BE USED WITH PULSED SIGNALS, AS IT CAN OTHERWISE DAMAGE THE LIGHT SOURCE." This package
+%   never allows it, in any mode. Low-power mode tops out at 200 mA in the
+%   hardware, which is below the ceiling here and so needs no separate guard.
 %
 %   See also doric.LightSource, doric.ChannelSettings
 
@@ -54,9 +73,19 @@ classdef Channel < handle
         MaxCurrentmA
     end
 
+    properties (Constant)
+        % Rated maximum of the 465 nm LED head (Doric LED Light Source manual V2.1.1, table 5.8).
+        % A hard ceiling: MaxCurrentmA cannot be raised above it, so nothing this package sends
+        % can exceed it. Change it only for a different LED head, with the vendor's rating.
+        DeviceMaxCurrentmA = 1000
+        % Doric's recommended operating current for a 1000 mA LED (manual table 5.2), and the
+        % default limit. The user may raise MaxCurrentmA up to DeviceMaxCurrentmA.
+        RecommendedMaxCurrentmA = 700
+    end
+
     properties (Access = private)
         Parent
-        MaxCurrentValue = 2000
+        MaxCurrentValue = doric.Channel.RecommendedMaxCurrentmA
     end
 
     methods
@@ -85,6 +114,16 @@ classdef Channel < handle
                     value < 0 || value > 65535 || value ~= fix(value)
                 error('doric:Channel:invalidLimit', ...
                     'MaxCurrentmA must be an integer in [0, 65535].');
+            end
+            % The LED's own rating, not a preference: refuse rather than clamp, so the caller
+            % sees that the request was impossible.
+            if value > doric.Channel.DeviceMaxCurrentmA
+                error('doric:Channel:aboveDeviceLimit', ...
+                    ['Channel %d: MaxCurrentmA = %d exceeds the LED''s rated maximum of %d mA ' ...
+                    '(465 nm head, Doric LED Light Source manual table 5.8). %d mA is the ' ...
+                    'recommended operating current. The limit was not changed.'], obj.Index, ...
+                    value, doric.Channel.DeviceMaxCurrentmA, ...
+                    doric.Channel.RecommendedMaxCurrentmA);
             end
             if ~isempty(obj.CommandedCurrentmA) && obj.CommandedCurrentmA > value
                 error('doric:Channel:limitBelowCommanded', ...

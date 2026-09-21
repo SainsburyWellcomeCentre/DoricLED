@@ -4,10 +4,12 @@ MATLAB control of the **Doric 2-channel LED fiber light source** (`LEDFLS_465_46
 a scriptable driver, an interactive GUI, and a simulated device for testing, built to run
 standalone or inside Bpod protocols and other closed-loop experiments.
 
-> **Status: complete but not yet verified on hardware.** Everything below works against the
-> simulated device and the helper program, and the automated tests pass. No part of the package
-> has been run with the light source attached yet, so treat the first real session as a
-> commissioning run: low currents, no animal connected (see [docs/rig-checks.md](docs/rig-checks.md)).
+> **Status: verified on hardware (2026-09-17).** Every mode has been applied, started and stopped
+> on both channels of a real `LEDFLS_465_465`, with the automated tests passing as well. What has
+> not been checked is the light itself: no one has watched the fiber or put a power meter on it,
+> and the external TTL/analog inputs have not been driven from a real source. Keep the first
+> sessions at low current with no animal connected
+> (see [docs/rig-checks.md](docs/rig-checks.md)).
 
 ## Features
 
@@ -23,7 +25,8 @@ standalone or inside Bpod protocols and other closed-loop experiments.
 ## Requirements
 
 - Windows 10/11, 64-bit
-- MATLAB R2024b or later, no toolboxes needed (developed and tested on R2025b)
+- MATLAB R2025b, no toolboxes needed (the only release tested here; the package uses no
+  release-specific features, so earlier releases may work but are unverified)
 - Doric `LEDFLS_465_465` connected by USB (it shows up as "LightSource Driver" in Device Manager)
 - The Doric System DLL, included in `DoricSystemDLL/`
 - MinGW-w64 C/C++ compiler (MATLAB Add-On *MATLAB Support for MinGW-w64 C/C++ Compiler*), only
@@ -54,7 +57,7 @@ doric.listDevices()                          % find the device's port number
 led = doric.LightSource('Port', 5);
 led.connect();                               % takes a few seconds
 
-led.Channels(1).MaxCurrentmA = 300;          % refuse anything brighter
+led.Channels(1).MaxCurrentmA = 300;          % refuse anything brighter (0-1000; default 700)
 led.Channels(1).apply(doric.ChannelSettings.cw(100));   % continuous, 100 mA
 led.Channels(1).start();
 led.Channels(1).setCurrent(150);             % change intensity while on
@@ -120,7 +123,18 @@ current limit that suits your LEDs and preparation:
 led.Channels(1).MaxCurrentmA = 500;
 ```
 
-Requests above the limit are refused, never reduced silently. The light is switched off when you
+Requests above the limit are refused, never reduced silently.
+
+**Current ceiling.** A 465 nm LED head is rated **1000 mA** and Doric recommends **700 mA** for
+LEDs of that rating (*LED Light Source* user manual V2.1.1, tables 5.8 and 5.2). `MaxCurrentmA`
+starts at 700 mA and cannot be set above 1000 mA from the API or the GUI, so nothing this package
+sends can exceed the LED's rating. The driver hardware can go to 2000 mA in pulsed *overdrive*;
+that is out of reach here on purpose, because Doric's manual restricts overdrive to pulsed
+signals — otherwise it damages the light source.
+
+One case the software cannot cover: in **external analog** mode the current follows the voltage on
+the BNC input at 400 mA/V, so 2.5 V already asks for 1000 mA and 5 V asks for 2000 mA. Scale your
+analog source accordingly; no limit set in MATLAB applies to it. The light is switched off when you
 disconnect, when the object is deleted, when the GUI window closes, and when MATLAB exits or
 crashes; `led.stopAll()` works in every state.
 

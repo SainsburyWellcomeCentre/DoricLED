@@ -12,6 +12,10 @@ classdef LibraryTransport < doric.transport.Transport
 %     * The library's debug text cannot be captured inside MATLAB, so a command is reported as
 %       successful whenever the call itself returns. Library errors are invisible: no
 %       libraryError replies, no LIBMSG messages, and LIST always reports zero devices.
+%     * unloadlibrary after the library's quit() takes MATLAB down with an access violation
+%       (0xc0000005; rig check 2026-09-17, docs/rig-checks.md). close() therefore leaves the
+%       library loaded unless UnloadOnClose is set, and the MATLAB process must be treated as
+%       throwaway: once closed, it cannot be reopened, only exited.
 %     * wait() is pumped only while a command runs, not continuously; each call to the library
 %       is followed by one wait(PumpMs).
 %     * Complex-mode settings need a pointer to an array of ComplexModulation structs, which
@@ -30,6 +34,10 @@ classdef LibraryTransport < doric.transport.Transport
         PumpMs = 10
         Debugger = true
         LibraryName = 'DoricSystem'
+        % Call unloadlibrary in close(). Off by default: after the library's quit() it crashes
+        % MATLAB with an access violation (rig check 2026-09-17). Left to the user, who may want
+        % it in a process that has not initialised the library.
+        UnloadOnClose = false
     end
 
     properties (Access = private)
@@ -107,7 +115,9 @@ classdef LibraryTransport < doric.transport.Transport
             obj.OpenPorts = zeros(1, 0);
             obj.Initialised = false;
             obj.Loaded = false;
-            if libisloaded(obj.LibraryName)
+            % Unloading after quit() faults inside the vendor DLL and kills MATLAB, so the
+            % library stays in the process unless the user asks for the unload.
+            if obj.UnloadOnClose && libisloaded(obj.LibraryName)
                 unloadlibrary(obj.LibraryName);
             end
         end

@@ -55,7 +55,11 @@ Rules of thumb:
 - **Program between trials.** `ls_send_settings` may interrupt a running sequence.
 - **Save `record()`** once per session (small struct), not per trial. Take it *before*
   `disconnect`, so the commanded state is still in it.
-- **Limits belong to the protocol's settings.** Set `MaxCurrentmA` per channel from `S` at setup;
+- **Limits belong to the protocol's settings**, under the LED's rating. `MaxCurrentmA` defaults to
+  700 mA and can never be raised above 1000 mA, the 465 nm LED's rating
+  (`doric.Channel.DeviceMaxCurrentmA`), so a protocol settings file cannot ask for more than the
+  hardware tolerates — a value above it errors at setup instead of reaching the animal.
+  Set `MaxCurrentmA` per channel from `S` at setup;
   a request above it is an error, so a settings typo stops the session instead of the animal's
   preparation.
 - **Emulator mode** can drive the GUI too: `doric.app(led)` attaches to the protocol's object

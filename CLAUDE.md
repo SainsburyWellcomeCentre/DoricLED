@@ -13,9 +13,9 @@ any MATLAB package doing closed-loop hardware control**, Bpod protocols included
    `docs/vendor-dll.md` (everything known about the DLL), `docs/bridge-protocol.md`,
    `docs/api-reference.md`, `docs/gui.md`.
 2. Check **Status** below for the current milestone. When the operator says **"go"**, start the
-   next unfinished work. Everything that is left needs the device, so ask for permission for that
-   specific run before touching it (see *Hardware*), and write the results into
-   `docs/rig-checks.md`.
+   next unfinished work. What is left needs someone at the rig (an eye on the fiber, a power
+   meter, a hand on the USB cable), so ask for permission for that specific run before touching
+   the device (see *Hardware*), and write the results into `docs/rig-checks.md`.
 3. Keep **Status** and the docs current as work lands (see *Docs rule*).
 
 ## Status
@@ -23,22 +23,26 @@ any MATLAB package doing closed-loop hardware control**, Bpod protocols included
 | Milestone | State |
 |---|---|
 | Phase 1: discovery and design | **Done** (2026-09-17). General-purpose package, full user control of every mode/setting in API and GUI, no protocol-specific code |
-| M0: spike | **Partly done** (2026-09-17). Done without hardware: bridge builds and runs, struct sizes/offsets confirmed (`docs/vendor-dll.md` §5, §8), whole protocol exercised against `doric_bridge.exe --simulate`. **Every hardware step is still pending** and needs operator approval (`docs/rig-checks.md` §1) |
+| M0: spike | **Done** (2026-09-17). Bridge builds and runs, struct sizes/offsets confirmed against the real DLL, whole protocol exercised in `--simulate` and on the device; every open DLL question answered except the ones needing other hardware (`docs/vendor-dll.md` §9) |
 | M1: skeleton, enums, `ChannelSettings`, `SimulatedTransport`, tests | **Done** |
-| M2: full bridge + `BridgeTransport` | **Done** (hardware check pending) |
+| M2: full bridge + `BridgeTransport` | **Done**, hardware-checked 2026-09-17 |
 | M3: `LightSource`/`Channel` | **Done** |
-| M4: GUI | **Done** (operator walk-through pending, `docs/rig-checks.md` §2) |
+| M4: GUI | **Done**; main window driven against the real device 2026-09-17. Esc, the advanced pop-up and the file dialogs still want a human pass (`docs/rig-checks.md` §5) |
 | M5: examples, integration guide, README final | **Done** |
-| M6: rig verification | **Not started** (`docs/rig-checks.md` §3) |
+| M6: rig verification | **Done** (2026-09-17): 18/18 mode-channel combinations, limit refusals, stop on window close and on MATLAB kill, latency table (`docs/rig-checks.md`) |
 
-114 tests, all passing headless on R2025b in about 13 s. Nothing has touched the device yet.
+119 tests, all passing headless on R2025b in about 13 s. The package has been run against the
+device (2026-09-17, `docs/rig-checks.md`): LEDFLS on **port 4**, reported as `LED Driver`,
+`DoricSystem.dll 1.3.0`.
 
-**Next work**, when the operator approves a run: the M0 hardware steps in `docs/rig-checks.md` §1,
-in that order, then §2–§4. They answer the open questions listed in `docs/vendor-dll.md` §8: where
-the library's debug text goes (the bridge captures stdout/stderr *and* `OutputDebugString`, and
-tags each line with `src=`), the LEDFLS port number and whether it is stable, whether commands need
-a trailing `wait()`, real command latency, the `ComplexModulation.mode` enum, `MicroscopeFollower`
-support, the device's real max current, and whether `ls_send_settings` stops a running channel.
+**Next work** is the *Pending* list in `docs/rig-checks.md`, all of which needs a person at the
+rig rather than more code: watching the fiber while the commanded light runs (including the
+waveform shapes and the stop-on-kill path), `ExtTTL`/`ExtAnalog`/`Triggered`/`Gated` with a real
+TTL source (keep an analog source at or below 2.5 V: 400 mA/V means 2.5 V is already the LED's
+1000 mA rating), port stability after a replug and a reboot, the LED's real maximum current (an
+operator decision, since it means driving near the rating), and a human pass over Esc, the
+*Advanced settings…* pop-up and the file dialogs. `MicroscopeFollower` (mode 10) stays out of
+`doric.Mode` until there is a microscope to follow.
 
 ## Environment
 
@@ -47,7 +51,7 @@ support, the device's real max current, and whether `ls_send_settings` stops a r
 | Project (edit here, from WSL) | `/mnt/c/Users/harrislab/Documents/MATLAB/DoricLED` |
 | Same path from Windows | `C:\Users\harrislab\Documents\MATLAB\DoricLED` |
 | Vendor files (**read-only**) | `DoricSystemDLL/`; runtime folder `DoricSystemDLL/API/lib/x64/release/Qt` |
-| MATLAB | R2025b only usable (`/mnt/c/Program Files/MATLAB/R2025b/bin/matlab.exe`). The `R2024b` folder is a leftover install with no `matlab.exe`, so R2024b cannot be tested here. Base MATLAB only, no toolboxes |
+| MATLAB | R2025b (`/mnt/c/Program Files/MATLAB/R2025b/bin/matlab.exe`), the only install on this host. Base MATLAB only, no toolboxes |
 | C/C++ compiler | MinGW-w64 (MATLAB support package): `C:\ProgramData\MATLAB\SupportPackages\R2025b\3P.instrset\mingw_w64.instrset\bin\g++.exe`; also configured for `mex` |
 | Device on Windows | "LightSource Driver", `USB\VID_04D8&PID_F57E`, class `USBDevice` (**not** a COM port) |
 | Bpod reference (read-only) | `../Bpod_Gen2` |
@@ -107,7 +111,10 @@ If that fails with `Exec format error`, WSL's Windows interop is not registered 
   `docs/bpod-integration.md` and `examples/`.
 - **The user has full control.** Expose every vendor mode and field in the API and the GUI. Never
   choose a mode for the user, never clamp silently. Limits are user-set and refusals are
-  explicit errors.
+  explicit errors. The **one** exception is the LED's own rating
+  (`doric.Channel.DeviceMaxCurrentmA` = 1000 mA, `docs/vendor-dll.md` §10): a hardware fact, not
+  a preference, so it is a constant the user cannot raise. Everything below it stays their
+  choice.
 
 ## Architecture in brief
 
@@ -125,7 +132,13 @@ Full detail in `docs/architecture.md`.
 - **D4** Commanded state only (the API is write-only); command success = ack + no library error text
   within the settle window.
 - **D5** Safety: stop all on connect/disconnect/delete/GUI close/bridge stdin EOF; `stopAll` works
-  in every state; per-channel `MaxCurrentmA` (user-set, default 2000) refuses, never clamps.
+  in every state; per-channel `MaxCurrentmA` (user-set, default 700) refuses, never clamps, and
+  cannot be raised above the constant `doric.Channel.DeviceMaxCurrentmA` = 1000 mA, the 465 nm
+  LED's rating (`docs/vendor-dll.md` §10). The driver's pulsed 2000 mA overdrive is out of reach
+  on purpose (the vendor manual: pulsed signals only, "AS IT CAN OTHERWISE DAMAGE THE LIGHT
+  SOURCE"). **The ceiling cannot be enforced in `ExtAnalog`**: the current then follows the BNC
+  voltage at 400 mA/V, so the rig's analog source must stay at or below 2.5 V. Say so rather than
+  pretending software covers it.
 - **D6** Closed-loop friendly: non-blocking `'Wait', false` on every command, events
   (`StateChanged`, `CommandCompleted`, `LibraryMessage`, `Faulted`), latency stats, `record()` for
   data files, no printing on hot paths.
@@ -162,6 +175,13 @@ Full detail in `docs/architecture.md`.
   - `event.EventData` already defines `Source`, so the event payload uses `LibrarySource`.
   - A method named `save` would shadow `save(obj, file)`; the config methods are
     `saveConfig`/`loadConfig`.
+  - The real library quotes each debug line and prefixes its own tag
+    (`"[Doric System] : LED Driver (Port #4)"`), so anything parsing that text must strip both;
+    `LightSource.cleanDeviceName` does it for device names.
+  - `unloadlibrary` on `DoricSystem.dll` after its `quit()` kills MATLAB with an access violation;
+    `LibraryTransport.UnloadOnClose` is off by default because of it.
+  - `LightSource.loadConfig` validates every entry in a first loop and only then assigns, so a bad
+    file changes nothing. Any new limit check belongs in that first loop, not in a setter alone.
 - **Bridge (C++)**: C++17, single source file if practical, no dependencies beyond the Windows API
   and the vendor headers; include `<cstdint>` before vendor headers; only one thread calls the DLL.
   Build via `native/doric_bridge/build_bridge.m` (or the g++ command documented there) into `bin/`.
@@ -170,9 +190,9 @@ Full detail in `docs/architecture.md`.
 
 - `matlab.unittest` class-based tests in `tests/`, run with `tests/run_tests.m` (headless; command
   above). No test may touch hardware; use `SimulatedTransport` or `doric_bridge.exe --simulate`.
-- Current suite (114 tests): `ChannelSettingsTest` (13), `EnumTest` (5), `ProtocolCodecTest` (10),
-  `SimulatedTransportTest` (11), `LightSourceTest` (34), `BridgeProtocolTest` (14, skipped without
-  `bin/doric_bridge.exe`), `GuiTest` (20), `LibraryTransportTest` (4), `ExamplesTest` (3).
+- Current suite (119 tests): `ChannelSettingsTest` (13), `EnumTest` (5), `ProtocolCodecTest` (11),
+  `SimulatedTransportTest` (12), `LightSourceTest` (36), `BridgeProtocolTest` (13, skipped without
+  `bin/doric_bridge.exe`), `GuiTest` (21), `LibraryTransportTest` (5), `ExamplesTest` (3).
 - New behaviour needs a test in the matching class. Keep `LightSourceTest` deterministic:
   `'AutoPoll', false`, zero waits, and an explicit `poll()` after a non-blocking command.
 - Things worth keeping covered because they broke once: the settings round trip through the real

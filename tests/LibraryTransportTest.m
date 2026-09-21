@@ -31,6 +31,19 @@ classdef LibraryTransportTest < matlab.unittest.TestCase
             clear cleanup
         end
 
+        function closeLeavesTheLibraryLoadedUnlessAsked(testCase)
+            % Unloading the vendor DLL after its quit() faults and kills MATLAB
+            % (0xc0000005, rig check 2026-09-17), so the unload is opt-in.
+            t = doric.transport.LibraryTransport();
+            cleanup = onCleanup(@() delete(t));
+            testCase.verifyFalse(t.UnloadOnClose);
+            t.UnloadOnClose = true;
+            testCase.verifyTrue(t.UnloadOnClose);
+            t.close();                                  % never loaded: close is a no-op
+            testCase.verifyFalse(t.isOpen());
+            clear cleanup
+        end
+
         function flatHeaderMatchesTheDocumentedLayout(testCase)
             header = fullfile(fileparts(which('doric.transport.LibraryTransport')), 'private', ...
                 'doric_flat.h');

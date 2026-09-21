@@ -575,6 +575,13 @@ classdef LightSource < handle
                 end
                 settings{k} = doric.ChannelSettings.fromStruct(entries(k).Settings);
                 limits(k) = entries(k).MaxCurrentmA;
+                % Checked here, not in the apply loop below, so a bad file changes nothing.
+                if limits(k) > doric.Channel.DeviceMaxCurrentmA
+                    error('doric:Channel:aboveDeviceLimit', ...
+                        ['Channel %d: the file asks for MaxCurrentmA = %g, above the LED''s ' ...
+                        'rated maximum of %d mA. Nothing was loaded.'], indices(k), limits(k), ...
+                        doric.Channel.DeviceMaxCurrentmA);
+                end
                 commanded = obj.Channels(indices(k)).CommandedCurrentmA;
                 if ~isempty(commanded) && commanded > limits(k)
                     error('doric:Channel:limitBelowCommanded', ...
@@ -1203,6 +1210,9 @@ classdef LightSource < handle
     methods (Static, Hidden)
         function devices = parseDevices(lines)
         %PARSEDEVICES table(Port, Name) from library lines of the form "<name> (Port #<n>)".
+        %   The real library wraps each line in quotes and prefixes it with its own tag, e.g.
+        %   "[Doric System] : LED Driver (Port #4)" (rig check 2026-09-17); both are stripped
+        %   so Name is the device name alone.
             ports = zeros(0, 1);
             names = strings(0, 1);
             for k = 1:numel(lines)
@@ -1211,11 +1221,21 @@ classdef LightSource < handle
                     port = str2double(tokens{m}{2});
                     if ~any(ports == port)
                         ports(end + 1, 1) = port; %#ok<AGROW>
-                        names(end + 1, 1) = string(strtrim(tokens{m}{1})); %#ok<AGROW>
+                        names(end + 1, 1) = ...
+                            string(doric.LightSource.cleanDeviceName(tokens{m}{1})); %#ok<AGROW>
                     end
                 end
             end
             devices = table(ports, names, 'VariableNames', {'Port', 'Name'});
+        end
+
+        function name = cleanDeviceName(text)
+        %CLEANDEVICENAME Drop the library's quoting and "[tag] : " prefix from a device name.
+            name = strtrim(char(text));
+            name = regexprep(name, '^["'']+', '');
+            name = regexprep(name, '^\[[^\]]*\]\s*:\s*', '');
+            name = regexprep(name, '["'']+$', '');
+            name = strtrim(name);
         end
     end
 

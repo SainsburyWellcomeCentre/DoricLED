@@ -76,7 +76,8 @@ Events fire only when something listens, so an unobserved command costs nothing 
 
 `doric:LightSource:` `notReady`, `busy`, `deviceNotFound`, `portRequired`, `portLocked`,
 `timeout`, `bridgeExited`, `libraryError`, `cancelled`, `invalidOption`, `invalidConfig`,
-`fileError`. Transport errors from `connect` pass through (e.g.
+`fileError`. `loadConfig` also raises `doric:Channel:aboveDeviceLimit` (and
+`limitBelowCommanded`) from its validation pass, before anything is assigned. Transport errors from `connect` pass through (e.g.
 `doric:BridgeTransport:bridgeNotFound`). A timeout or a dead bridge also makes the object
 `Faulted`; a library "Device not found" while `Ready` does too.
 
@@ -86,7 +87,9 @@ Events fire only when something listens, so an unobserved command costs nothing 
 |---|---|
 | `Index` | 1 or 2 |
 | `Settings` | Pending `doric.ChannelSettings` (settable; a struct is accepted and converted). Not sent until `apply` |
-| `MaxCurrentmA` | User limit, default 2000. A request above it errors `doric:Channel:overCurrent`; lowering it below `CommandedCurrentmA` errors `doric:Channel:limitBelowCommanded`. Nothing is ever clamped |
+| `MaxCurrentmA` | User limit, default 700 (`RecommendedMaxCurrentmA`). `loadConfig` refuses a file whose limit is above `DeviceMaxCurrentmA` and loads nothing. A request above it errors `doric:Channel:overCurrent`; lowering it below `CommandedCurrentmA` errors `doric:Channel:limitBelowCommanded`; raising it above `DeviceMaxCurrentmA` errors `doric:Channel:aboveDeviceLimit`. Nothing is ever clamped |
+| `DeviceMaxCurrentmA` | Constant 1000 mA: the rated maximum of a 465 nm LED head (Doric *LED Light Source* manual V2.1.1, table 5.8). A hard ceiling — no API or GUI path can command more, in any current mode. The driver's pulsed 2000 mA overdrive is deliberately out of reach. It does **not** apply in `ExtAnalog`, where the BNC voltage sets the current at 400 mA/V |
+| `RecommendedMaxCurrentmA` | Constant 700 mA: Doric's recommended operating current for a 1000 mA LED (manual table 5.2), and the default of `MaxCurrentmA` |
 | `CommandedSettings` | Last settings the device acknowledged, `[]` before any |
 | `CommandedCurrentmA` | Last current acknowledged (from settings or `setCurrent`), `[]` before any |
 | `IsRunning` | Commanded running flag |
@@ -96,9 +99,9 @@ Events fire only when something listens, so an unobserved command costs nothing 
 | `start()` / `stop()` | `ls_start_channel` / `ls_stop_channel` |
 | `setCurrent(mA)` | `ls_send_current`; allowed while running (fast path) |
 
-Errors: `doric:Channel:` `overCurrent`, `invalidSettings`, `invalidCurrent`, `invalidLimit`,
-`limitBelowCommanded`, plus the outcome codes (`libraryError`, `timeout`, `bridgeExited`, …) and
-`doric:LightSource:notReady`.
+Errors: `doric:Channel:` `overCurrent`, `aboveDeviceLimit`, `invalidSettings`, `invalidCurrent`,
+`invalidLimit`, `limitBelowCommanded`, plus the outcome codes (`libraryError`, `timeout`,
+`bridgeExited`, …) and `doric:LightSource:notReady`.
 
 ## `doric.ChannelSettings` (value)
 
@@ -200,9 +203,14 @@ stdin-EOF safety path on `close`. Properties: `Devices`, `LatencyMs`, `HonourWai
 
 ### `doric.transport.LibraryTransport`
 
-Experimental `loadlibrary` fallback (D1). Never run against hardware; library text cannot be
-captured in-process and Complex segments are unsupported (`doric:LibraryTransport:unsupported`).
-See its help and `rig-checks.md`.
+Experimental `loadlibrary` fallback (D1). Library text cannot be captured in-process (so `LIST`
+always reports zero devices and library errors are invisible) and Complex segments are unsupported
+(`doric:LibraryTransport:unsupported`). Run against the device once, on 2026-09-17: the flat
+commands work and can drive light, but the MATLAB process always ends in an access violation
+(0xc0000005) once the library has been initialised. `UnloadOnClose` (default `false`) therefore
+keeps `close` from calling `unloadlibrary`, which would crash MATLAB immediately; the process must
+be treated as throwaway. Properties: `DllDir`, `PumpMs`, `Debugger`, `LibraryName`,
+`UnloadOnClose`. See its help, `vendor-dll.md` §9 and `rig-checks.md`.
 
 ### `doric.transport.MessageClassifier` / `ProtocolCodec`
 

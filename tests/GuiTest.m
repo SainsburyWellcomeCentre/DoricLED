@@ -227,6 +227,34 @@ classdef GuiTest < matlab.unittest.TestCase
             clear cleanup
         end
 
+        function noControlCanAskForMoreThanTheLedRating(testCase)
+            % The rating is the LED's, not a preference: the boxes themselves stop at it.
+            app = testCase.App;
+            rated = doric.Channel.DeviceMaxCurrentmA;
+            for k = 1:2
+                testCase.verifyEqual(app.Controls.Intensity(k).Limits, [0 rated]);
+                % The slider tracks MaxCurrentmA, which can never be above the rating.
+                testCase.verifyLessThanOrEqual(app.Controls.Slider(k).Limits(2), rated);
+            end
+            app.openAdvanced();
+            for k = 1:2
+                testCase.verifyEqual(app.AdvancedControls.Limits.MaxCurrent(k).Limits, [0 rated]);
+            end
+            testCase.connectApp();
+            % Raising the limit past the rating is refused and leaves the limit alone.
+            app.AdvancedControls.Limits.MaxCurrent(1).Value = rated;
+            app.AdvancedControls.Limits.MaxCurrent(1).ValueChangedFcn( ...
+                app.AdvancedControls.Limits.MaxCurrent(1), []);
+            testCase.verifyEqual(app.LightSource.Channels(1).MaxCurrentmA, rated);
+            testCase.verifyError(@() assignLimit(app.LightSource.Channels(1), rated + 1), ...
+                'doric:Channel:aboveDeviceLimit');
+            testCase.verifyEqual(app.LightSource.Channels(1).MaxCurrentmA, rated);
+
+            function assignLimit(channel, value)
+                channel.MaxCurrentmA = value;
+            end
+        end
+
         function limitsTabRefusesALimitBelowTheCommandedCurrent(testCase)
             app = testCase.App;
             testCase.connectApp();

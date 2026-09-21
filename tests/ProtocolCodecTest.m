@@ -111,5 +111,14 @@ classdef ProtocolCodecTest < matlab.unittest.TestCase
             testCase.verifyEqual(devices.Name(1), "LEDFLS_465_465");
             testCase.verifyEqual(height(doric.LightSource.parseDevices({'No available device(s)'})), 0);
         end
+
+        function parseDevicesStripsTheLibrarysOwnQuotingAndTag(testCase)
+            % The real library quotes the line and prefixes its own tag (rig check 2026-09-17):
+            %   "[Doric System] : LED Driver (Port #4)"
+            devices = doric.LightSource.parseDevices( ...
+                {'"[Doric System] : LED Driver (Port #4)"'});
+            testCase.verifyEqual(devices.Port, 4);
+            testCase.verifyEqual(devices.Name(1), "LED Driver");
+        end
     end
 end

@@ -4,8 +4,10 @@ The helper process of decision D1 (`architecture.md`). Source: `native/doric_bri
 built with `native/doric_bridge/build_bridge.m` (or `doric.build()`) into `bin/doric_bridge.exe`.
 MATLAB side: `doric.transport.BridgeTransport` and `doric.transport.ProtocolCodec`.
 
-**Implemented and tested** with `--simulate` by `tests/BridgeProtocolTest.m` (14 tests). The steps
-that need the real DLL are still pending (see `rig-checks.md`).
+**Implemented and tested** with `--simulate` by `tests/BridgeProtocolTest.m` (13 tests), and
+exercised end to end against the real DLL and device on 2026-09-17 (see `rig-checks.md`). The
+library's debug text arrives only on the bridge's stdout/stderr capture (`src=stdio`), never
+through `OutputDebugString`, so that capture is the whole error channel.
 
 ## Process
 
@@ -165,7 +167,9 @@ checks again.
 | Blocking command, `SettleMs` 0 | 1.1 ms |
 | Blocking command, `SettleMs` 100 | 119 ms |
 
-Real-device latency (USB and library overhead) is unknown until the M0/M6 rig checks.
+Real-device latency, measured through `LightSource` on 2026-09-17: `CURRENT`, `START` and `STOP`
+5–9 ms and `SETTINGS` ~12 ms with `settle=0`; ~110–130 ms with `SettleMs` 100. `INIT` 10–13 s,
+`OPEN` 5.1 s and `LIST` 0.6–2.2 s, each dominated by its own `waitms`.
 
 **Host rule:** a burst of non-blocking requests without polling could fill the bridge's stdout
 pipe, which blocks the bridge and then the host's own write. `BridgeTransport.sendImpl` therefore

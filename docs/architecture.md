@@ -2,8 +2,8 @@
 
 Design of the `doric` MATLAB package: a general-purpose driver, GUI and integration layer for
 the Doric 2-channel LED fiber light source `LEDFLS_465_465` (2 × 465 nm). Status:
-**implemented (M1–M5) and tested without hardware; every rig check is still pending**
-(see §8 for milestones and `rig-checks.md`).
+**implemented (M1–M6) and verified on the real device on 2026-09-17**; what is left needs an eye
+or a power meter at the fiber (see §8 for milestones and `rig-checks.md`).
 
 ## 1. Goals and non-goals
 
@@ -50,7 +50,11 @@ Why:
   continuously on its own thread, so no MATLAB code ever has to call `wait`.
 
 Fallback: `doric.transport.LibraryTransport` (`loadlibrary` with a hand-written flat C header),
-kept behind the same interface. It is used only if the spike (M0) shows the bridge cannot work.
+kept behind the same interface. The 2026-09-17 rig run settled its status: the flat commands do
+work in-process and can drive light, but the MATLAB process always ends in an access violation
+(0xc0000005) once the library has been initialised — at `unloadlibrary`, or otherwise at MATLAB
+exit — and library text stays invisible. D1 stands; the fallback is for throwaway processes only
+(`vendor-dll.md` §9.8).
 
 MATLAB side (implemented): the bridge runs as a **Java `ProcessBuilder`** child with stdin and
 stdout piped and stderr merged. `BufferedReader.ready()` tells MATLAB whether a whole line is
@@ -105,8 +109,20 @@ Property names and GUI labels say *commanded*.
 
 ### D5. Safety limits are user-owned and explicit
 
-- Per channel: `MaxCurrentmA` (default 2000, the manual's typical ceiling; the user can change
-  it at any time, from the API or the GUI). A request above it **errors**; it is never clamped.
+- **The LED's rating is a hard ceiling, not a preference.** `doric.Channel.DeviceMaxCurrentmA`
+  is a constant 1000 mA: the rated maximum of a 465 nm head (Doric *LED Light Source* manual
+  V2.1.1, table 5.8, which covers the LEDFLS). `MaxCurrentmA` cannot be raised above it
+  (`doric:Channel:aboveDeviceLimit`), so no API or GUI path can command more, in any mode. The
+  driver itself would deliver up to 2000 mA — its pulsed *Overdrive* column — and this package
+  deliberately does not expose that: reaching it safely needs the vendor's duty-cycle guidance,
+  and the vendor's own manual says overdrive is for pulsed signals only, "AS IT CAN OTHERWISE
+  DAMAGE THE LIGHT SOURCE".
+- **The one gap, stated rather than papered over:** in `ExtAnalog` the current follows the BNC
+  voltage at 400 mA/V, so the hardware, not the package, decides it. 2.5 V is already 1000 mA.
+  No MATLAB-side guard can change that; the rig's analog source has to be scaled.
+- Per channel: `MaxCurrentmA` (default 700 mA, Doric's recommended operating current for a
+  1000 mA LED, manual table 5.2; the user can change it at any time, from the API or the GUI,
+  anywhere in 0–1000). A request above it **errors**; it is never clamped.
 - On connect: `ls_stop_all` before anything else.
 - On `disconnect`/`delete`/GUI close (when the GUI owns the device)/error teardown:
   `ls_stop_all`, then `close_device`, then `quit`. Idempotent.
@@ -199,7 +215,9 @@ Disconnected ─────────► Initialising ───────�
   `doric.transport.MessageClassifier`, mirrored in the bridge; both tables were filled from the
   strings found in the DLL, see `vendor-dll.md` §8). Unknown text is `info`; it is never silently
   dropped.
-- Timeouts per operation (init, open, command) are properties with defaults from M0 timings.
+- Timeouts per operation (init, open, command) are properties with defaults from M0 timings; the
+  rig run measured `INIT` 10–13 s, `OPEN` 5.1 s, `LIST` 0.6–2.2 s and 5–9 ms per running command,
+  all inside those defaults.
 - Constructors do not touch hardware. `connect` does. Failures inside `connect` roll back
   (stop, close, quit) before rethrowing.
 - `delete` never throws; teardown failures become warnings.
@@ -222,7 +240,7 @@ DoricLED/
     +transport/  +gui/  private/
   native/doric_bridge/          bridge source + build script (build_bridge.m)
   bin/                          built doric_bridge.exe (build output)
-  tests/                        matlab.unittest tests (114); run_tests.m
+  tests/                        matlab.unittest tests (119); run_tests.m
   examples/                     example_basic.m, example_closed_loop.m, example_bpod_softcode.m
   docs/                         this folder
   DoricSystemDLL/               vendor files (read-only)
@@ -233,13 +251,13 @@ DoricLED/
 
 | # | Milestone | Hardware? | State |
 |---|---|---|---|
-| M0 | **Spike.** (a) Build `doric_bridge.exe`. (b) Confirm the vendor Qt folder loads out-of-process. (c) Capture what `available_devices_with_ports` prints and on which stream; record the LEDFLS port number. (d) Print `sizeof`/`offsetof` of the structs. (e) CW on ch1 at a low current, seen by the operator. (f) Measure command latency with and without trailing `wait`. (g) Try the complex-mode enum question. (h) Brief `loadlibrary` smoke test. | (a), (d): no. (b), (c), (e)–(h): **yes** | **Partly done.** (a) and (d) done (`vendor-dll.md` §5, §8); the whole protocol is exercised against the real executable in `--simulate`. (b), (c), (e)–(h) wait for an operator-approved run |
+| M0 | **Spike.** (a) Build `doric_bridge.exe`. (b) Confirm the vendor Qt folder loads out-of-process. (c) Capture what `available_devices_with_ports` prints and on which stream; record the LEDFLS port number. (d) Print `sizeof`/`offsetof` of the structs. (e) CW on ch1 at a low current, seen by the operator. (f) Measure command latency with and without trailing `wait`. (g) Try the complex-mode enum question. (h) Brief `loadlibrary` smoke test. | (a), (d): no. (b), (c), (e)–(h): **yes** | **Done** 2026-09-17 (`vendor-dll.md` §9, `rig-checks.md`). Only the operator's own look at the fiber in (e) is outstanding |
 | M1 | Package skeleton: enums, `ChannelSettings`/`ComplexSegment` with validation and factories, `SimulatedTransport`, test runner | No | **Done** |
-| M2 | Full `doric_bridge` protocol + `BridgeTransport` (process, correlation, timeouts, message classification) | Build: no. Check: yes | **Done** without hardware: 14 protocol tests against `doric_bridge.exe --simulate`. Hardware check pending |
-| M3 | `LightSource`/`Channel`: state machine, commands, limits, events, log, `record`, JSON config | No (simulated) | **Done**: 34 tests including fault injection (library error, timeout, bridge exit) |
-| M4 | GUI `doric.gui.LightSourceApp` exposing every field | No (simulated); rig check | **Done**: 20 headless tests. Operator walk-through pending |
+| M2 | Full `doric_bridge` protocol + `BridgeTransport` (process, correlation, timeouts, message classification) | Build: no. Check: yes | **Done**: 13 protocol tests against `doric_bridge.exe --simulate`, and the whole protocol exercised against the real DLL on 2026-09-17 |
+| M3 | `LightSource`/`Channel`: state machine, commands, limits, events, log, `record`, JSON config | No (simulated) | **Done**: 36 tests including fault injection (library error, timeout, bridge exit) and the LED-rating ceiling |
+| M4 | GUI `doric.gui.LightSourceApp` exposing every field | No (simulated); rig check | **Done**: 21 headless tests, plus the main window driven against the real device on 2026-09-17. Esc, the advanced pop-up and the file dialogs still want a human pass |
 | M5 | `examples/`, `bpod-integration.md`, README | Emulator only | **Done**: 3 examples, each run by the test suite |
-| M6 | Rig verification: every mode on both channels, limits, stop-on-close, stop-on-MATLAB-kill, latency table | Yes | **Not started** (`rig-checks.md`) |
+| M6 | Rig verification: every mode on both channels, limits, stop-on-close, stop-on-MATLAB-kill, latency table | Yes | **Done** 2026-09-17: 18/18 mode-channel combinations, limit refusals, stop on window close and on MATLAB kill, latency table (`rig-checks.md`). Physical observation of the light, port stability across replug/reboot and the LED's real maximum current remain pending there |
 
-Test counts as of 2026-09-17: 114 tests, all passing headless in about 13 s on MATLAB R2025b
+Test counts as of 2026-09-17: 119 tests, all passing headless in about 13 s on MATLAB R2025b
 (`matlab -batch "results = run_tests; exit(any([results.Failed]))"` from `tests/`).

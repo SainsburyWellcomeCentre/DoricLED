@@ -1,9 +1,10 @@
 # Vendor DLL notes (`DoricSystemDLL`)
 
 Discovery notes from inspecting `DoricSystemDLL/` (read-only vendor folder) and the host PC, plus
-what the bridge confirmed by compiling against the vendor headers (§8). Anything still marked
-**verify** needs the real library with the device attached (an operator-approved run; see
-`rig-checks.md`) and this file updated with the result.
+what the bridge confirmed by compiling against the vendor headers (§8) and what the rig runs of
+2026-09-17 confirmed against the real device (§9, log in `rig-checks.md`). Anything still marked
+**verify** needs another operator-approved run (see `rig-checks.md`) and this file updated with
+the result.
 
 ## 1. What ships
 
@@ -54,11 +55,17 @@ The other exports (`otpg_*`, `rotary_joint_*`) are out of scope.
   `Unable to connect device... Device not found`, `Unable to send settings... Device not found`,
   `Unable to send current... Device not found`, `Unable to start channel... Device not found`,
   `Couldn't get device, port number not used by a Doric device`. Capturing that text is the only
-  way to detect failure (this is decision D1 in `architecture.md`). **Verify** which stream it goes
-  to (stdout, stderr, or `OutputDebugString`) and whether `init(true)` changes that.
-- Commands are probably queued to the library's own thread and executed while `wait()` pumps.
-  **Verify** whether a command reaches the device without a following `wait()`, and measure the
-  latency of `ls_send_current`, `ls_start_channel` and `ls_stop_channel`.
+  way to detect failure (this is decision D1 in `architecture.md`). **Confirmed 2026-09-17**: the
+  text goes to the process's **stdout/stderr**, never to `OutputDebugString` — every captured line
+  in every rig run was tagged `src=stdio`, although the bridge's `OutputDebugString` listener was
+  active (`ods=1`). `init(true)` makes the library echo each `ls_send_settings` field by field
+  (`[Doric LightSource] : mode = 4`, …), which is how the wire encoding was verified end to end.
+- Commands are queued to the library's own thread and executed while `wait()` pumps.
+  **Confirmed 2026-09-17**: with the bridge pumping `wait()` continuously, no trailing `wait()` is
+  needed — every command took effect and was acknowledged with `settle = 0`. Round trip measured
+  through `LightSource`: `CURRENT`, `START`, `STOP` **5–9 ms**, `SETTINGS` ~12 ms at `SettleMs` 0;
+  ~110–130 ms at `SettleMs` 100 (the settle window dominates). `INIT` ~10–13 s, `OPEN` ~5.1 s,
+  `LIST` ~0.6–2.2 s, all dominated by their `waitms`.
 
 ## 3. Headers are C++, not C
 
@@ -78,14 +85,18 @@ Mode:         Off=0, CW=1, ExtTTL=2, ExtAnalog=3, Square=4, Complex=5, Custom=6
 CurrentMode:  Normal=0, LowPower=1, Overdrive=2
 ```
 
-Differences in the vendor Python definitions (`lightsource_defs.py`), to **verify**:
+Differences in the vendor Python definitions (`lightsource_defs.py`):
 
-- `LightSourceMode` also has `MicroscopeFollower = 10`.
+- `LightSourceMode` also has `MicroscopeFollower = 10`. Still **unverified**: it needs a Doric
+  microscope to follow, which this rig does not have, so `doric.Mode` leaves it out.
 - `ComplexModulation.mode` uses a *different* enum, `LightSourceComplexMode`:
   `Off=0, CW=1, Square=2, Input=3, Triangle=4, RampUp=5, RampDown=6, Sine=7, Stairs=8, Custom=9,
-  Delay=10, LockIn=11`. The C++ header types the field as `LightSource::Mode`. The Python enum
-  (with `Delay`, `Triangle`, …, used by the Complex example) is most likely what the firmware
-  expects.
+  Delay=10, LockIn=11`. The C++ header types the field as `LightSource::Mode`. **Settled
+  2026-09-17**: the Python enum is the right one. A Complex sequence of CW(1) + Delay(10) +
+  Triangle(4) was accepted and started with no error text, and the library echoed the segment
+  modes back unchanged — including `mode = 10`, which is outside the 0–6 range of
+  `LightSource::Mode`. (The emitted waveform itself still wants a photodiode; see
+  `rig-checks.md`.)
 - The Python field `isTriggerRepeatable` is the header's `isRepeatableSequence` (same slot).
 - Python pre-allocates **32** `ComplexModulation` elements (`LIGHTSOURCE_MAX_COMPLEX_SEQ`); the
   manual gives `nbComplexModulations` a maximum of 32.
@@ -120,7 +131,7 @@ Only the `loadlibrary` fallback needs the layout by hand; the bridge compiles ag
 
 | Off | Field | Type | Default | Manual range |
 |---|---|---|---|---|
-| 0 | `current` | uint16 | 0 | mA, 0 – "depends on light source, usually 2000" |
+| 0 | `current` | uint16 | 0 | mA, 0 – "depends on light source, usually 2000" (this light source's LEDs are rated 1000 mA; see §10) |
 | 4 | `startingDelayMs` | uint32 | 0 | |
 | 8 | `delayBetweenSeqMs` | uint32 | 0 | |
 | 16 | `periodMs` | double | 100 | |
@@ -186,13 +197,18 @@ Standard sequence: `init(true)`, `wait(5000..10000)`, `available_devices_with_po
 - Windows lists the driver as **"LightSource Driver"**, `USB\VID_04D8&PID_F57E\4.0.2`, class
   `USBDevice`. **It is not a COM port.** COM1/3/4/5/8/9 belong to other devices. The DLL's
   `portNumber` is Doric's own index, obtainable only from `available_devices_with_ports()` output.
-  **Verify** the number and whether it is stable across replugging and reboots.
+  **Confirmed 2026-09-17**: this rig's LEDFLS answers on **port 4**, listed as
+  `"[Doric System] : LED Driver (Port #4)"` — the library quotes the line and prefixes its own
+  tag, and the device name it reports is `LED Driver`, not `LEDFLS_465_465`
+  (`doric.LightSource.parseDevices` strips the quoting and the tag). The number was identical
+  across nine separate `init`/`list` runs in one session; stability across replugging and a
+  reboot is still **unverified** (`rig-checks.md`).
 - `DoricSystem.dll` imports `Qt6Core/Gui/Network/SerialPort/Multimedia`, `opencv_world454`,
   `atcore`, `atutility`, `zaber-motion`, `SVGenSDK64`, `ic4core`, `quazip` and the MSVC 14 runtime
   (VC++ redistributable 14.50 is installed system-wide).
 - MATLAB R2025b ships Qt 5 renamed as `Qt5*MW.dll`, so Qt6 does not collide by name. Generic
   DLLs (hdf5, zlib, png, tiff, ffmpeg) could still collide inside the MATLAB process.
-- MATLAB R2025b (primary) and R2024b are installed. **MinGW-w64** is installed as a MATLAB support
+- MATLAB R2025b is the only usable install. **MinGW-w64** is installed as a MATLAB support
   package (`C:\ProgramData\MATLAB\SupportPackages\R2025b\3P.instrset\mingw_w64.instrset`) and
   configured for `mex` C and C++. No Visual Studio. No real Python (only the Store alias).
 
@@ -206,25 +222,69 @@ Standard sequence: `init(true)`, `wait(5000..10000)`, `available_devices_with_po
 | Device-listing format | The DLL's format string is `%1 (Port #%2)`, so `doric.LightSource.parseDevices` matches `<name> (Port #<n>)` |
 | Protocol, settings encoding, fault handling | Exercised end to end against the real executable in `--simulate` mode (13 tests) |
 
-Still open, all needing the device (`rig-checks.md`):
+Every one of those questions was answered by the rig runs of 2026-09-17; see §9.
 
-1. **Where the debug text goes.** The bridge covers both possibilities: it redirects its own
-   stdout/stderr (Win32 handles and C-runtime descriptors) into a capture pipe *and* listens for
-   `OutputDebugString`; `QT_FORCE_STDERR_LOGGING=1` is set before the DLL loads. `HELLO` reports
-   whether the `OutputDebugString` listener is active (`ods=1`), and each captured line says
-   `src=stdio` or `src=ods`, so one run answers the question.
-2. **The LEDFLS port number** and whether it survives replugging and reboots.
-3. **Whether a command needs a trailing `wait()`** and the real command latency (with `settle` 0
-   vs 100 ms). The bridge pumps `wait()` continuously, so a missing trailing wait should not
-   matter; the rig check has to confirm it.
-4. **The `ComplexModulation.mode` enumeration** (the C++ header says `LightSource::Mode`, the
-   vendor Python code and example say `LightSourceComplexMode`; the package uses the Python
-   values). A Complex sequence with a `Delay` segment (10) settles it.
-5. **`MicroscopeFollower` (10)**: accepted by the bridge, absent from `doric.Mode` until a run
-   shows the device honours it.
-6. **The device's real maximum current** (the manual says "usually 2000 mA"), which is what the
-   default `MaxCurrentmA` is based on.
-7. **Whether `ls_send_settings` stops a running channel** (the package leaves `IsRunning`
-   unchanged when settings are applied).
-8. **`loadlibrary` smoke test** for `doric.transport.LibraryTransport`, in a throwaway MATLAB
-   process (it loads Qt6, OpenCV, HDF5 and FFmpeg into MATLAB).
+## 9. Confirmed with the device (rig runs, 2026-09-17)
+
+Full log in `rig-checks.md`. The device was a `LEDFLS_465_465` on this host, no animal connected,
+fibers terminated; currents stayed between 20 and 100 mA.
+
+| Question (§8 list) | Answer |
+|---|---|
+| Library version | `DoricSystem.dll [1.3.0]`, loaded from `DoricSystemDLL/API/lib/x64/release/Qt` |
+| 1. Where the debug text goes | **stdout/stderr only** (`src=stdio` on every line, in every run), never `OutputDebugString`, although the listener was active (`ods=1`). The bridge's capture is therefore the whole error channel |
+| 2. LEDFLS port number | **4**, name `LED Driver`, line format `"[Doric System] : LED Driver (Port #4)"`. Identical across nine `init`/`list` runs; replug and reboot still pending |
+| 3. Trailing `wait()` and latency | No trailing `wait()` needed while the bridge pumps. `CURRENT`/`START`/`STOP` 5–9 ms, `SETTINGS` ~12 ms at `SettleMs` 0; ~110–130 ms at `SettleMs` 100. `INIT` 10–13 s, `OPEN` 5.1 s |
+| 4. `ComplexModulation.mode` enum | `LightSourceComplexMode` (the vendor Python values). CW(1) + Delay(10) + Triangle(4) accepted, started, and echoed back unchanged |
+| 5. `MicroscopeFollower` (10) | **Still unverified** — needs a Doric microscope, which this rig does not have. `doric.Mode` still omits it |
+| 6. Real maximum current | **Answered from the vendor's own manual** (see §10), not by driving current: a 465 nm head is rated **1000 mA**, with **700 mA** recommended. The package now enforces 1000 mA as a hard ceiling and defaults `MaxCurrentmA` to 700 |
+| 7. Does `ls_send_settings` stop a running channel? | Sending new settings to a running channel returns no error and the library prints nothing about stopping. Whether the *emitted light* pauses needs a photodiode; the package still leaves `IsRunning` unchanged and an explicit `START` afterwards also succeeded |
+| 8. `loadlibrary` smoke test | Works for the flat commands — `init`, `open_device`, `ls_send_settings`, `ls_send_current`, `ls_start_channel`, `ls_stop_all`, `close_device`, `quit` all succeeded from inside MATLAB, and light was driven that way. **But the MATLAB process always dies with an access violation (0xc0000005)**: at `unloadlibrary` if it is called, otherwise at MATLAB exit. Complex settings are refused by design. `LibraryTransport.UnloadOnClose` is off by default so user code can finish first, and such a process must be treated as throwaway. This is the strongest argument for D1 |
+
+Other things the runs showed:
+
+- `init` transiently opens and closes the device itself (`Device connected -> LED Driver`,
+  `Device closed -> LED Driver`) before any `open_device`.
+- With `init(true)`, `ls_send_settings` echoes every field of `Settings`, the `TTLModulation`
+  block and each `ComplexModulation` — a free confirmation of the wire encoding.
+- `SIZES` against the real MSVC-built DLL matches §5 exactly (settings 2088, ttl 40, complex 40).
+- Qt prints `WARNING: QApplication was not created in the main() thread.` on every `init`; it is
+  harmless and classified `warning`, not an error.
+- A hard kill of MATLAB with a channel running makes the bridge exit on stdin EOF, as designed.
+
+## 10. Current ratings of the light source (vendor manuals)
+
+Sources: Doric **LED Light Source user manual V2.1.1**
+(`https://www.doriclenses.com/downloads/UserManual/UserManual_LED_Light_Source_V2.1.1.pdf`),
+whose specification chapter covers the LEDFLS, and the product pages on
+`neuro.doriclenses.com`. Nothing here was established by driving current into the device.
+
+| Figure | Value | Source |
+|---|---|---|
+| **Maximum current, 465 nm LED** | **1000 mA** | Table 5.8, *Typical Connectorized LED, LEDFRJ1 and LEDFLS Output Power vs Optical Fiber Core Diameter*: the row `465 / ~25 nm FWHM / 1000 mA`. The neighbouring 450 nm row is also 1000 mA |
+| **Recommended operating current** | **700 mA** | Table 5.2, *General Specifications for Connectorized LEDs*: "700 mA recommended for 1000 mA max current LEDs" |
+| Driver output range, normal mode | 40–2000 mA | Specification table: "Output Current … 40 - 2000 mA Normal Mode" |
+| Driver output range, low-power mode | 4–200 mA | Same table, "4 - 200 mA Low Current Mode"; the manual's operation guide says low power mode's maximal current is 200 mA, minimum 2.5 mA |
+| Overdrive | 2000 mA **pulsed only** | Table 5.8's "Overdrive @2000 mA (pulsed)" column, giving ×1.7 the power at 465 nm. The manual's operation guide is explicit, in capitals: overdrive "allows the system to exceed the normal safe current limit of the light source. **THIS SHOULD ONLY BE USED WITH PULSED SIGNALS, AS IT CAN OTHERWISE DAMAGE THE LIGHT SOURCE.**" |
+| Analog input scaling | 400 mA/V (40 mA/V in low power) | Specification table. A 5 V input therefore asks for 2000 mA, above what a 465 nm LED can take, so the manual tells users to scale the input voltage down to the LED's maximum |
+
+Consequences for the package, all in `doric.Channel`:
+
+- `DeviceMaxCurrentmA = 1000` is a constant hard ceiling. `MaxCurrentmA` cannot be raised above
+  it (`doric:Channel:aboveDeviceLimit`), and every current that gets sent is checked against
+  `MaxCurrentmA`, so no mode — CW, Square, Complex segments, Custom points or `setCurrent` —
+  can exceed the LED's rating.
+- `RecommendedMaxCurrentmA = 700` is the default limit, so the safe value is what you get
+  without doing anything.
+- Operating outside the manual's stated conditions also voids the 12-month warranty (§6.2).
+- The front-panel control knob sets the driver's own maximum current to the LED, independently of
+  anything sent over USB. Software cannot see or constrain it.
+- The pulsed 2000 mA overdrive is **not** reachable through this package. Using it safely needs
+  the vendor's duty-cycle limits (the firmware has `driver.current.overdrive.duration` and
+  `driver.current.overdrive.max` parameters that the DLL's light-source API does not expose),
+  and a 465 nm LED held there continuously is destroyed. Selecting `CurrentMode.Overdrive` is
+  still allowed; the 1000 mA ceiling applies regardless.
+- **In external-analog mode the ceiling cannot be enforced**: the manual says "in External Analog
+  mode, the current is set at the maximum current and can't be changed" — it follows the BNC
+  voltage at 400 mA/V, so 2.5 V already means 1000 mA and 5 V means 2000 mA. Keep the analog
+  source at or below 2.5 V (0.5 V in low-power mode). No software in MATLAB can prevent this.

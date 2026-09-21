@@ -236,6 +236,49 @@ classdef LightSourceTest < matlab.unittest.TestCase
 
         % ---- limits ------------------------------------------------------------------------
 
+        function theLedRatingCannotBeRaisedAway(testCase)
+            % 465 nm head: rated 1000 mA, 700 mA recommended (Doric LED Light Source manual
+            % V2.1.1, tables 5.8 and 5.2). No path may command more than the rating.
+            ls = testCase.LightSource;
+            testCase.verifyEqual(doric.Channel.DeviceMaxCurrentmA, 1000);
+            testCase.verifyEqual(doric.Channel.RecommendedMaxCurrentmA, 700);
+            testCase.verifyEqual(ls.Channels(1).MaxCurrentmA, 700);
+            testCase.verifyEqual(ls.Channels(2).MaxCurrentmA, 700);
+
+            testCase.verifyError(@() assign(ls.Channels(1), 'MaxCurrentmA', 1001), ...
+                'doric:Channel:aboveDeviceLimit');
+            testCase.verifyError(@() assign(ls.Channels(1), 'MaxCurrentmA', 2000), ...
+                'doric:Channel:aboveDeviceLimit');
+            testCase.verifyEqual(ls.Channels(1).MaxCurrentmA, 700);   % unchanged
+
+            ls.Channels(1).MaxCurrentmA = 1000;                       % the rating itself is fine
+            testCase.verifyEqual(ls.Channels(1).MaxCurrentmA, 1000);
+
+            ls.connect();
+            testCase.verifyError(@() ls.Channels(1).setCurrent(1001), 'doric:Channel:overCurrent');
+            testCase.verifyError(@() ls.Channels(1).apply(doric.ChannelSettings.cw(1500)), ...
+                'doric:Channel:overCurrent');
+            testCase.verifyEmpty(testCase.Transport.callsOf('CURRENT'));
+            testCase.verifyEmpty(testCase.Transport.callsOf('SETTINGS'));
+        end
+
+        function aConfigAboveTheLedRatingLoadsNothing(testCase)
+            ls = testCase.LightSource;
+            file = [tempname '.json'];
+            cleanup = onCleanup(@() delete(file));
+            ls.Channels(1).MaxCurrentmA = 500;
+            ls.Channels(2).Settings = doric.ChannelSettings.cw(50);
+            ls.saveConfig(file);
+            text = regexprep(fileread(file), '("MaxCurrentmA":\s*)500', '$11500');
+            fid = fopen(file, 'w'); fwrite(fid, text); fclose(fid);
+
+            testCase.verifyError(@() ls.loadConfig(file), 'doric:Channel:aboveDeviceLimit');
+            % All or nothing: the second channel's settings must not have been applied either.
+            testCase.verifyEqual(ls.Channels(1).MaxCurrentmA, 500);
+            testCase.verifyEqual(ls.Channels(2).Settings.CurrentmA, 50);
+            clear cleanup
+        end
+
         function currentAboveLimitIsRefusedNotClamped(testCase)
             ls = testCase.LightSource;
             ls.connect();
