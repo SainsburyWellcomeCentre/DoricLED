@@ -17,7 +17,11 @@ classdef LightSource < handle
 %       Devices      table (Port, Name) of the last listing
 %
 %   Properties (settable)
-%       Port              Doric port; [] = the only listed device (settable when not connected)
+%       Port              Doric port; [] = auto: the one listed device whose name matches
+%                         DeviceNamePattern (settable when not connected)
+%       DeviceNamePattern regular expression (case-sensitive) that picks the light source among
+%                         the listed devices when Port is [] (default 'LED', which matches the
+%                         LEDFLS's "LED Driver" and skips e.g. an "Assisted Rotary Joint")
 %       SettleMs          confirmation window per command (default 100; 0 = ack only)
 %       CommandTimeoutMs  extra time allowed for a command's reply (default 2000)
 %       InitWaitMs, ListWaitMs, OpenWaitMs, CloseWaitMs   library waits (5000, 500, 5000, 1000)
@@ -49,8 +53,10 @@ classdef LightSource < handle
 %   Errors
 %       doric:LightSource:notReady       command needs state Ready
 %       doric:LightSource:busy           connect/list while connecting or closing
-%       doric:LightSource:deviceNotFound port not listed or the library cannot find it
-%       doric:LightSource:portRequired   several devices listed and Port is empty
+%       doric:LightSource:deviceNotFound port not listed, no listed name matches
+%                                        DeviceNamePattern, or the library cannot find it
+%       doric:LightSource:portRequired   several listed names match DeviceNamePattern and Port
+%                                        is empty
 %       doric:LightSource:timeout        no reply in time (the object becomes Faulted)
 %       doric:LightSource:bridgeExited   the bridge process ended
 %       doric:LightSource:libraryError   the library printed an error for the command
@@ -92,6 +98,7 @@ classdef LightSource < handle
         PollPeriodMs = 20
         Verbose = false
         LogCapacity = 1000
+        DeviceNamePattern = 'LED'
     end
 
     events
@@ -227,6 +234,15 @@ classdef LightSource < handle
 
         function set.LogCapacity(obj, value)
             obj.LogCapacity = doric.LightSource.checkMs(value, 'LogCapacity', Inf);
+        end
+
+        function set.DeviceNamePattern(obj, value)
+            if ~(ischar(value) && (isrow(value) || isempty(value))) && ...
+                    ~(isstring(value) && isscalar(value))
+                error('doric:LightSource:invalidOption', ...
+                    'DeviceNamePattern must be a character vector or string scalar.');
+            end
+            obj.DeviceNamePattern = char(value);
         end
 
         function set.Verbose(obj, value)
@@ -877,21 +893,32 @@ classdef LightSource < handle
             obj.Devices = devices;
             port = obj.PortValue;
             if isempty(port)
-                if height(devices) == 1
-                    port = devices.Port(1);
-                    obj.PortValue = port;
-                    obj.addLog('event', 'info', 'LIST', [], result.Id, [], NaN, ...
-                        sprintf('Port not set; using the only listed device, port %d', port));
-                elseif height(devices) == 0
+                % Other Doric devices (e.g. an Assisted Rotary Joint) share the library and show
+                % up in the same listing; opening one of them by mistake would send it commands
+                % meant for the light source, so Auto only picks a name that matches the pattern.
+                listed = strjoin(compose('%s on port %d', devices.Name, devices.Port), ', ');
+                candidates = devices(doric.LightSource.nameMatches(devices.Name, ...
+                    obj.DeviceNamePattern), :);
+                if height(devices) == 0
                     obj.connectFailed('deviceNotFound', ['No Doric device listed. ' ...
                         'Check the USB connection and that no other program holds the device.']);
                     return
-                else
-                    obj.connectFailed('portRequired', sprintf(['Several devices are listed ' ...
-                        '(%s); set Port.'], strjoin(compose('%s on port %d', devices.Name, ...
-                        devices.Port), ', ')));
+                elseif height(candidates) == 0
+                    obj.connectFailed('deviceNotFound', sprintf(['No listed device matches ' ...
+                        'DeviceNamePattern ''%s'' (listed: %s). Set Port, or DeviceNamePattern.'], ...
+                        obj.DeviceNamePattern, listed));
+                    return
+                elseif height(candidates) > 1
+                    obj.connectFailed('portRequired', sprintf(['Several listed devices match ' ...
+                        'DeviceNamePattern ''%s'' (listed: %s); set Port.'], ...
+                        obj.DeviceNamePattern, listed));
                     return
                 end
+                port = candidates.Port(1);
+                obj.PortValue = port;
+                obj.addLog('event', 'info', 'LIST', [], result.Id, [], NaN, ...
+                    sprintf('Port not set; using %s on port %d (listed: %s)', ...
+                    candidates.Name(1), port, listed));
             elseif height(devices) > 0 && ~any(devices.Port == port)
                 obj.connectFailed('deviceNotFound', sprintf(['Port %d is not listed. ' ...
                     'Listed: %s.'], port, strjoin(compose('%s on port %d', devices.Name, ...
@@ -1203,7 +1230,7 @@ classdef LightSource < handle
         function names = settableNames(~)
             names = {'SettleMs', 'CommandTimeoutMs', 'InitWaitMs', 'ListWaitMs', 'OpenWaitMs', ...
                 'CloseWaitMs', 'ConnectTimeoutMs', 'Debugger', 'AutoPoll', 'PollPeriodMs', ...
-                'Verbose', 'LogCapacity'};
+                'Verbose', 'LogCapacity', 'DeviceNamePattern'};
         end
     end
 
@@ -1227,6 +1254,16 @@ classdef LightSource < handle
                 end
             end
             devices = table(ports, names, 'VariableNames', {'Port', 'Name'});
+        end
+
+        function tf = nameMatches(names, pattern)
+        %NAMEMATCHES True for each name that DeviceNamePattern matches (empty pattern: all).
+            if isempty(pattern)
+                tf = true(numel(names), 1);
+                return
+            end
+            tf = ~cellfun(@isempty, regexp(cellstr(names), pattern, 'once'));
+            tf = reshape(tf, [], 1);
         end
 
         function name = cleanDeviceName(text)

@@ -52,9 +52,10 @@ standalone or inside Bpod protocols and other closed-loop experiments.
 ## Quick start
 
 ```matlab
-doric.listDevices()                          % find the device's port number
+doric.listDevices()                          % every Doric device on this PC, with ports
 
-led = doric.LightSource('Port', 5);
+led = doric.LightSource();                   % finds the LED driver by name, skips others
+                                             % (e.g. a rotary joint); or ('Port', 4)
 led.connect();                               % takes a few seconds
 
 led.Channels(1).MaxCurrentmA = 300;          % refuse anything brighter (0-1000; default 700)
@@ -131,6 +132,11 @@ starts at 700 mA and cannot be set above 1000 mA from the API or the GUI, so not
 sends can exceed the LED's rating. The driver hardware can go to 2000 mA in pulsed *overdrive*;
 that is out of reach here on purpose, because Doric's manual restricts overdrive to pulsed
 signals — otherwise it damages the light source.
+
+The 1000 mA ceiling is a constant written for the 465 nm LEDFLS. If you use this package with a
+different Doric light source (another LED, a laser), the ceiling must be checked against that
+device's rating and changed by a developer in `+doric/Channel.m` (`DeviceMaxCurrentmA`). Change it
+only with caution: any damage that results is the responsibility of whoever changed it.
 
 One case the software cannot cover: in **external analog** mode the current follows the voltage on
 the BNC input at 400 mA/V, so 2.5 V already asks for 1000 mA and 5 V asks for 2000 mA. Scale your

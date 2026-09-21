@@ -45,7 +45,7 @@ doric.app(..., 'Visible', false) % hidden windows (tests, scripted checks)
 | Mode | **ExtTTL** on both |
 | Intensity | **0 mA** on both |
 | Live intensity | On |
-| Port | **Auto** (the only listed device; type a number or pick one after *Scan*) |
+| Port | **Auto** (the one listed device whose name matches `DeviceNamePattern`, default `'LED'`, so a rotary joint on the same PC is skipped; type a number or pick one after *Scan*) |
 
 These are the GUI's starting *pending* values; they are **sent only when the user presses Apply or
 Start**. They do not change the API's own defaults (`doric.ChannelSettings()` keeps the vendor
@@ -66,7 +66,8 @@ protocol prepared.
   `MaxCurrentmA`; the box stops at 1000 mA, the LED's rated maximum
   (`doric.Channel.DeviceMaxCurrentmA`), so an over-rating value cannot be typed at all, and a
   value above the channel's own `MaxCurrentmA` is refused by the API with an explicit message
-  (never clamped). With *Live intensity* on and the channel running, changes
+  (never clamped). The slider snaps to the nearest whole mA (that is its resolution, not a clamp);
+  a fractional value *typed* in the box is refused with a message. With *Live intensity* on and the channel running, changes
   call `setCurrent` (`ls_send_current`), throttled to about 10 Hz while dragging, with the final
   value always sent on release. With it off, intensity is sent on *Apply*.
 - **Start** applies pending settings first when they differ from the commanded ones, and waits for

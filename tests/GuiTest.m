@@ -94,6 +94,19 @@ classdef GuiTest < matlab.unittest.TestCase
             testCase.verifyNotEmpty(testCase.Transport.callsOf('START'));
         end
 
+        function sliderSnapsToWholeMilliamps(testCase)
+            % A dragged slider lands between integers; that must not raise the whole-number error.
+            app = testCase.App;
+            testCase.connectApp();
+            testCase.setValue(app.Controls.Slider(1), 123.4);
+            testCase.verifyEqual(app.LightSource.Channels(1).Settings.CurrentmA, 123);
+            testCase.verifyEmpty(app.LastError);
+            % A typed fraction is still refused, not rounded.
+            testCase.setValue(app.Controls.Intensity(1), 150.5);
+            testCase.verifyEqual(app.LightSource.Channels(1).Settings.CurrentmA, 123);
+            testCase.verifySubstring(app.LastError, 'whole number');
+        end
+
         function liveIntensitySendsCurrentWhileRunning(testCase)
             app = testCase.App;
             testCase.connectApp();
@@ -110,6 +123,54 @@ classdef GuiTest < matlab.unittest.TestCase
             app.LightSource.poll();
             calls = testCase.Transport.callsOf('CURRENT');
             testCase.verifyEqual(calls(end).Args.ma, 90);   % nothing new was sent
+        end
+
+        function liveDragKeepsOneCurrentInFlightAndSendsTheNewest(testCase)
+            % Queued live steps made the light lag the slider on the rig (2026-09-21).
+            app = testCase.App;
+            testCase.connectApp();
+            testCase.press(app.Controls.Start);
+            app.LightSource.poll();
+            before = numel(testCase.Transport.callsOf('CURRENT'));
+            slider = app.Controls.Slider(1);
+            for v = [10 20 30 40]
+                pause(app.LiveIntervalS + 0.01);
+                slider.ValueChangingFcn(slider, struct('Value', v));
+            end
+            calls = testCase.Transport.callsOf('CURRENT');
+            testCase.verifyNumElements(calls, before + 1);     % only the first, not yet polled
+            testCase.verifyEqual(calls(end).Args.ma, 10);
+            % Mid-drag, the pending value follows the thumb instead of snapping back.
+            testCase.verifyEqual(app.LightSource.Channels(1).Settings.CurrentmA, 40);
+            app.LightSource.poll();                             % first reply -> newest sent
+            testCase.verifyEqual(slider.Value, 40);             % the refresh kept the thumb
+            calls = testCase.Transport.callsOf('CURRENT');
+            testCase.verifyNumElements(calls, before + 2);
+            testCase.verifyEqual(calls(end).Args.ma, 40);
+            testCase.verifyEqual(calls(end).Args.settle, app.LiveSettleMs);
+            app.LightSource.poll();
+            slider.Value = 40;
+            slider.ValueChangedFcn(slider, []);                 % release on the sent value
+            testCase.verifyNumElements(testCase.Transport.callsOf('CURRENT'), before + 2);
+        end
+
+        function applyOnARunningChannelRestartsIt(testCase)
+            app = testCase.App;
+            testCase.connectApp();
+            testCase.setValue(app.Controls.Mode(1), 'CW');
+            testCase.press(app.Controls.Start);
+            app.LightSource.poll();
+            testCase.setValue(app.Controls.Live, false);
+            testCase.setValue(app.Controls.Intensity(1), 60);
+            starts = numel(testCase.Transport.callsOf('START'));
+            testCase.press(app.Controls.Apply);
+            for k = 1:3
+                app.LightSource.poll();
+            end
+            % Both channels are selected and running, so each gets settings, then a start.
+            testCase.verifyNumElements(testCase.Transport.callsOf('START'), starts + 2);
+            testCase.verifyTrue(app.LightSource.Channels(1).IsRunning);
+            testCase.verifyEqual(app.LightSource.Channels(1).CommandedSettings.CurrentmA, 60);
         end
 
         function stopAllWorksFromTheButtonAndTheEscapeKey(testCase)

@@ -120,6 +120,11 @@ Property names and GUI labels say *commanded*.
 - **The one gap, stated rather than papered over:** in `ExtAnalog` the current follows the BNC
   voltage at 400 mA/V, so the hardware, not the package, decides it. 2.5 V is already 1000 mA.
   No MATLAB-side guard can change that; the rig's analog source has to be scaled.
+- **Changing the light source.** The 1000 mA ceiling is hard-coded for the LEDFLS_465_465. A
+  developer moving the package to another Doric LED head, a laser or another driver must revisit
+  `DeviceMaxCurrentmA` against that device's rating. It may be changed, with caution; whoever
+  changes it takes full responsibility for any damage to the light source, fibers or
+  preparation. The note sits next to the constant in `+doric/Channel.m`.
 - Per channel: `MaxCurrentmA` (default 700 mA, Doric's recommended operating current for a
   1000 mA LED, manual table 5.2; the user can change it at any time, from the API or the GUI,
   anywhere in 0–1000). A request above it **errors**; it is never clamped.
@@ -240,7 +245,7 @@ DoricLED/
     +transport/  +gui/  private/
   native/doric_bridge/          bridge source + build script (build_bridge.m)
   bin/                          built doric_bridge.exe (build output)
-  tests/                        matlab.unittest tests (119); run_tests.m
+  tests/                        matlab.unittest tests (122); run_tests.m
   examples/                     example_basic.m, example_closed_loop.m, example_bpod_softcode.m
   docs/                         this folder
   DoricSystemDLL/               vendor files (read-only)
@@ -257,7 +262,7 @@ DoricLED/
 | M3 | `LightSource`/`Channel`: state machine, commands, limits, events, log, `record`, JSON config | No (simulated) | **Done**: 36 tests including fault injection (library error, timeout, bridge exit) and the LED-rating ceiling |
 | M4 | GUI `doric.gui.LightSourceApp` exposing every field | No (simulated); rig check | **Done**: 21 headless tests, plus the main window driven against the real device on 2026-09-17. Esc, the advanced pop-up and the file dialogs still want a human pass |
 | M5 | `examples/`, `bpod-integration.md`, README | Emulator only | **Done**: 3 examples, each run by the test suite |
-| M6 | Rig verification: every mode on both channels, limits, stop-on-close, stop-on-MATLAB-kill, latency table | Yes | **Done** 2026-09-17: 18/18 mode-channel combinations, limit refusals, stop on window close and on MATLAB kill, latency table (`rig-checks.md`). Physical observation of the light, port stability across replug/reboot and the LED's real maximum current remain pending there |
+| M6 | Rig verification: every mode on both channels, limits, stop-on-close, stop-on-MATLAB-kill, latency table | Yes | **Done** 2026-09-17: 18/18 mode-channel combinations, limit refusals, stop on window close and on MATLAB kill, latency table (`rig-checks.md`). Physical observation of the light, port stability across replug/reboot and Auto port with the rotary joint attached remain pending there |
 
-Test counts as of 2026-09-17: 119 tests, all passing headless in about 13 s on MATLAB R2025b
+Test counts as of 2026-09-21: 122 tests, all passing headless in about 13 s on MATLAB R2025b
 (`matlab -batch "results = run_tests; exit(any([results.Failed]))"` from `tests/`).

@@ -26,6 +26,13 @@ classdef Channel < handle
 %   Methods (all accept 'Wait', true|false and 'SettleMs', n; Wait defaults to true)
 %       result = apply()            send Settings (ls_send_settings)
 %       result = apply(settings)    set Settings, then send it
+%                                   On a running channel apply also restarts it (ls_start_channel
+%                                   after a successful ls_send_settings), because the device keeps
+%                                   emitting its previous settings until the next start. The
+%                                   returned result is the SETTINGS one; with 'Wait', true a
+%                                   failed restart errors, with 'Wait', false OnDone receives the
+%                                   START outcome. 'Restart', false only sends the settings: the
+%                                   device then keeps the old ones until start().
 %       result = start()            ls_start_channel
 %       result = stop()             ls_stop_channel
 %       result = setCurrent(mA)     ls_send_current; allowed while running (fast path)
@@ -76,7 +83,13 @@ classdef Channel < handle
     properties (Constant)
         % Rated maximum of the 465 nm LED head (Doric LED Light Source manual V2.1.1, table 5.8).
         % A hard ceiling: MaxCurrentmA cannot be raised above it, so nothing this package sends
-        % can exceed it. Change it only for a different LED head, with the vendor's rating.
+        % can exceed it.
+        %
+        % NOTE FOR DEVELOPERS: this value is hard-coded for the LEDFLS_465_465. If the light
+        % source changes (another Doric LED head, a laser, another driver), this cap must be
+        % revisited against that device's own rating in its vendor manual. It may be changed,
+        % with caution; whoever changes it takes full responsibility for any damage to the
+        % light source, the fibers or the preparation. See docs/vendor-dll.md section 10.
         DeviceMaxCurrentmA = 1000
         % Doric's recommended operating current for a 1000 mA LED (manual table 5.2), and the
         % default limit. The user may raise MaxCurrentmA up to DeviceMaxCurrentmA.
@@ -147,7 +160,7 @@ classdef Channel < handle
                 end
                 varargin(1) = [];
             end
-            opts = obj.options(varargin);
+            opts = obj.options(varargin, struct('Restart', true));
             peak = settings.peakCurrentmA();
             if peak > obj.MaxCurrentValue
                 error('doric:Channel:overCurrent', ...
@@ -160,8 +173,30 @@ classdef Channel < handle
                 warning('doric:ChannelSettings:suspicious', 'Channel %d: %s', obj.Index, ...
                     warnings{k});
             end
-            result = obj.Parent.channelCommand(obj.Index, 'SETTINGS', settings, opts, ...
-                @(r) obj.onSettingsSent(settings));
+            onSent = @(r) obj.onSettingsSent(settings);
+            if ~(logical(opts.Restart) && obj.IsRunning)
+                result = obj.Parent.channelCommand(obj.Index, 'SETTINGS', settings, opts, onSent);
+                return
+            end
+            % A running channel keeps emitting its previous settings until the next
+            % ls_start_channel (seen at the rig, 2026-09-21), so it is restarted for the new ones
+            % to take effect. START follows only a successful SETTINGS: refused settings never
+            % restart the old ones.
+            startArgs = {'Wait', opts.Wait, 'OnDone', opts.OnDone};
+            if ~isempty(opts.SettleMs)
+                startArgs = [startArgs, {'SettleMs', opts.SettleMs}];
+            end
+            settingsOpts = opts;
+            if opts.Wait
+                settingsOpts.OnDone = [];
+                result = obj.Parent.channelCommand(obj.Index, 'SETTINGS', settings, ...
+                    settingsOpts, onSent);
+                obj.start(startArgs{:});
+            else
+                settingsOpts.OnDone = @(r) obj.startAfterSettings(r, startArgs, opts.OnDone);
+                result = obj.Parent.channelCommand(obj.Index, 'SETTINGS', settings, ...
+                    settingsOpts, onSent);
+            end
         end
 
         function result = start(obj, varargin)
@@ -217,12 +252,36 @@ classdef Channel < handle
     end
 
     methods (Access = private)
-        function opts = options(obj, args)
-            opts = commandOptions(struct('Wait', true, 'SettleMs', [], 'OnDone', []), args, ...
-                'Channel');
+        function opts = options(obj, args, extra)
+            defaults = struct('Wait', true, 'SettleMs', [], 'OnDone', []);
+            if nargin > 2
+                for name = fieldnames(extra)'
+                    defaults.(name{1}) = extra.(name{1});
+                end
+            end
+            opts = commandOptions(defaults, args, 'Channel');
             opts.Component = 'Channel';
             if isempty(obj.Parent) || ~isvalid(obj.Parent)
                 error('doric:LightSource:notReady', 'The owning LightSource was deleted.');
+            end
+        end
+
+        function startAfterSettings(obj, result, startArgs, onDone)
+        % Continuation of a non-blocking apply on a running channel. The caller's OnDone hears
+        % the START outcome, or the SETTINGS failure when there was no START.
+            if result.Ok
+                try
+                    obj.start(startArgs{:});
+                    return
+                catch err
+                    result.Ok = false;
+                    result.Command = 'START';
+                    result.Code = 'notReady';
+                    result.Message = err.message;
+                end
+            end
+            if ~isempty(onDone)
+                onDone(result);
             end
         end
 

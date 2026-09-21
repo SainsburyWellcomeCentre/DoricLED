@@ -73,10 +73,39 @@ classdef LightSourceTest < matlab.unittest.TestCase
             testCase.verifyFalse(testCase.Transport.isOpen());  % rolled back
         end
 
-        function severalDevicesNeedAnExplicitPort(testCase)
-            testCase.Transport.Devices = struct('Port', {5, 7}, 'Name', {'LEDFLS', 'Other'});
+        function autoPortSkipsDevicesThatAreNotTheLightSource(testCase)
+            % Seen on the rig: a rotary joint listed next to the LED driver.
+            testCase.Transport.Devices = struct('Port', {3, 4}, 'Name', ...
+                {'Assisted Rotary Joint (ARJ_24_Gen2)', 'LED Driver'});
+            ls = testCase.LightSource;
+            result = ls.connect();
+            testCase.verifyTrue(result.Ok);
+            testCase.verifyEqual(ls.Port, 4);
+            testCase.verifyEqual(ls.DeviceName, 'LED Driver');
+        end
+
+        function severalMatchingDevicesNeedAnExplicitPort(testCase)
+            testCase.Transport.Devices = struct('Port', {5, 7}, 'Name', {'LEDFLS', 'LED Driver'});
             testCase.verifyError(@() testCase.LightSource.connect(), ...
                 'doric:LightSource:portRequired');
+        end
+
+        function noMatchingDeviceFailsAndPatternIsTheUsersChoice(testCase)
+            testCase.Transport.Devices = struct('Port', 3, 'Name', 'Assisted Rotary Joint');
+            ls = testCase.LightSource;
+            testCase.verifyError(@() ls.connect(), 'doric:LightSource:deviceNotFound');
+            testCase.verifyFalse(testCase.Transport.isOpen());   % nothing was opened
+            testCase.Transport.Devices = struct('Port', {3, 6}, 'Name', ...
+                {'Assisted Rotary Joint', 'Laser Driver'});
+            ls.DeviceNamePattern = 'Laser';
+            result = ls.connect();
+            testCase.verifyTrue(result.Ok);
+            testCase.verifyEqual(ls.Port, 6);
+            testCase.verifyError(@() setPattern(ls, 5), 'doric:LightSource:invalidOption');
+
+            function setPattern(lightSource, value)
+                lightSource.DeviceNamePattern = value;
+            end
         end
 
         function noDeviceListedFails(testCase)
@@ -157,6 +186,53 @@ classdef LightSourceTest < matlab.unittest.TestCase
             testCase.verifyEqual(ch.CommandedState, 'Stopped');
             settingsCall = testCase.Transport.callsOf('SETTINGS');
             testCase.verifyEqual(settingsCall.Args.Settings.CurrentmA, 120);
+        end
+
+        function applyRestartsARunningChannel(testCase)
+            % The device keeps emitting the old settings until the next start (rig 2026-09-21).
+            ls = testCase.LightSource;
+            ls.connect();
+            ch = ls.Channels(1);
+            n = numel(testCase.Transport.Calls);
+            ch.apply(doric.ChannelSettings.cw(30));     % stopped: settings only
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS'});
+            ch.start();
+            n = numel(testCase.Transport.Calls);
+            ch.apply(doric.ChannelSettings.cw(40));     % running: settings, then start
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS', 'START'});
+            testCase.verifyTrue(ch.IsRunning);
+            testCase.verifyEqual(ch.CommandedSettings.CurrentmA, 40);
+            n = numel(testCase.Transport.Calls);
+            ch.apply(doric.ChannelSettings.cw(50), 'Restart', false);
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS'});
+        end
+
+        function nonBlockingApplyRestartsOnlyAfterTheSettingsSucceed(testCase)
+            ls = testCase.LightSource;
+            ls.connect();
+            ch = ls.Channels(1);
+            ch.apply(doric.ChannelSettings.cw(20));
+            ch.start();
+            n = numel(testCase.Transport.Calls);
+            heard = {};
+            ch.apply(doric.ChannelSettings.cw(30), 'Wait', false, ...
+                'OnDone', @(r) hear(r.Command));
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS'});
+            ls.poll();
+            ls.poll();
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS', 'START'});
+            testCase.verifyEqual(heard, {'START'});
+
+            % Refused settings never restart the old ones.
+            n = numel(testCase.Transport.Calls);
+            testCase.Transport.failNext('SETTINGS', 'Error: settings refused');
+            testCase.verifyError(@() ch.apply(doric.ChannelSettings.cw(35)), ...
+                'doric:Channel:libraryError');
+            testCase.verifyEqual(commandsSince(testCase.Transport, n), {'SETTINGS'});
+
+            function hear(command)
+                heard{end + 1} = command;
+            end
         end
 
         function applyWithoutArgumentUsesPendingSettings(testCase)
@@ -489,4 +565,9 @@ end
 function assign(obj, name, value)
 % Assign a property from a function handle, so verifyError sees the setter's own error.
     obj.(name) = value;
+end
+
+function commands = commandsSince(transport, n)
+% Commands the transport received after the first n calls.
+    commands = {transport.Calls(n + 1:end).Command};
 end

@@ -31,7 +31,10 @@ any MATLAB package doing closed-loop hardware control**, Bpod protocols included
 | M5: examples, integration guide, README final | **Done** |
 | M6: rig verification | **Done** (2026-09-17): 18/18 mode-channel combinations, limit refusals, stop on window close and on MATLAB kill, latency table (`docs/rig-checks.md`) |
 
-119 tests, all passing headless on R2025b in about 13 s. The package has been run against the
+122 tests, all passing headless on R2025b in about 13 s. 2026-09-21: Auto port picks the listed
+device whose name matches `LightSource.DeviceNamePattern` (default `'LED'`), so the rotary joint
+on port 3 is skipped; the GUI slider snaps to whole mA instead of raising the whole-number error
+(rig confirmation of Auto is `docs/rig-checks.md` §2b). The package has been run against the
 device (2026-09-17, `docs/rig-checks.md`): LEDFLS on **port 4**, reported as `LED Driver`,
 `DoricSystem.dll 1.3.0`.
 
@@ -39,9 +42,8 @@ device (2026-09-17, `docs/rig-checks.md`): LEDFLS on **port 4**, reported as `LE
 rig rather than more code: watching the fiber while the commanded light runs (including the
 waveform shapes and the stop-on-kill path), `ExtTTL`/`ExtAnalog`/`Triggered`/`Gated` with a real
 TTL source (keep an analog source at or below 2.5 V: 400 mA/V means 2.5 V is already the LED's
-1000 mA rating), port stability after a replug and a reboot, the LED's real maximum current (an
-operator decision, since it means driving near the rating), and a human pass over Esc, the
-*Advanced settings…* pop-up and the file dialogs. `MicroscopeFollower` (mode 10) stays out of
+1000 mA rating), port stability after a replug and a reboot, Auto port with the rotary joint
+attached (§2b), and a human pass over Esc, the *Advanced settings…* pop-up and the file dialogs. `MicroscopeFollower` (mode 10) stays out of
 `doric.Mode` until there is a microscope to follow.
 
 ## Environment
@@ -114,7 +116,11 @@ If that fails with `Exec format error`, WSL's Windows interop is not registered 
   explicit errors. The **one** exception is the LED's own rating
   (`doric.Channel.DeviceMaxCurrentmA` = 1000 mA, `docs/vendor-dll.md` §10): a hardware fact, not
   a preference, so it is a constant the user cannot raise. Everything below it stays their
-  choice.
+  choice. It is hard-coded for the LEDFLS_465_465: if the light source changes (another Doric
+  LED, a laser), a developer revisits it against that device's rating. It may be changed with
+  caution, and any damage is the responsibility of whoever changed it; the note next to the
+  constant in `+doric/Channel.m` and `docs/vendor-dll.md` §10 say so. Do not change it on your
+  own initiative.
 
 ## Architecture in brief
 
@@ -178,6 +184,11 @@ Full detail in `docs/architecture.md`.
   - The real library quotes each debug line and prefixes its own tag
     (`"[Doric System] : LED Driver (Port #4)"`), so anything parsing that text must strip both;
     `LightSource.cleanDeviceName` does it for device names.
+  - The library lists **every** Doric USB device, not only light sources (a rotary joint shows
+    up next to the LED driver). Anything choosing a port must filter by name
+    (`DeviceNamePattern`), never assume a lone or first entry is the light source.
+  - A `uislider` reports fractional values; round slider positions, but keep refusing fractional
+    *typed* values (no silent change of what the user entered).
   - `unloadlibrary` on `DoricSystem.dll` after its `quit()` kills MATLAB with an access violation;
     `LibraryTransport.UnloadOnClose` is off by default because of it.
   - `LightSource.loadConfig` validates every entry in a first loop and only then assigns, so a bad
@@ -190,9 +201,9 @@ Full detail in `docs/architecture.md`.
 
 - `matlab.unittest` class-based tests in `tests/`, run with `tests/run_tests.m` (headless; command
   above). No test may touch hardware; use `SimulatedTransport` or `doric_bridge.exe --simulate`.
-- Current suite (119 tests): `ChannelSettingsTest` (13), `EnumTest` (5), `ProtocolCodecTest` (11),
-  `SimulatedTransportTest` (12), `LightSourceTest` (36), `BridgeProtocolTest` (13, skipped without
-  `bin/doric_bridge.exe`), `GuiTest` (21), `LibraryTransportTest` (5), `ExamplesTest` (3).
+- Current suite (122 tests): `ChannelSettingsTest` (13), `EnumTest` (5), `ProtocolCodecTest` (11),
+  `SimulatedTransportTest` (12), `LightSourceTest` (38), `BridgeProtocolTest` (13, skipped without
+  `bin/doric_bridge.exe`), `GuiTest` (22), `LibraryTransportTest` (5), `ExamplesTest` (3).
 - New behaviour needs a test in the matching class. Keep `LightSourceTest` deterministic:
   `'AutoPoll', false`, zero waits, and an explicit `poll()` after a non-blocking command.
 - Things worth keeping covered because they broke once: the settings round trip through the real

@@ -30,10 +30,29 @@ Read-only: `State` (`Disconnected`, `Initialising`, `Opening`, `Ready`, `Closing
 (table `Port`, `Name` from the last listing).
 
 Settable: `Port` (only while `Disconnected` or `Faulted`, else `doric:LightSource:portLocked`;
-`[]` means "the only listed device"), `SettleMs` (100), `CommandTimeoutMs` (2000),
+`[]` means auto: the one listed device whose name matches `DeviceNamePattern`),
+`DeviceNamePattern` (`'LED'`: a case-sensitive regular expression; see *Choosing the device*
+below), `SettleMs` (100), `CommandTimeoutMs` (2000),
 `InitWaitMs` (5000), `ListWaitMs` (500), `OpenWaitMs` (5000), `CloseWaitMs` (1000),
 `ConnectTimeoutMs` (30000), `Debugger` (true), `AutoPoll` (true), `PollPeriodMs` (20),
 `Verbose` (false), `LogCapacity` (1000).
+
+### Choosing the device
+
+The library lists every Doric USB device on the PC, not only light sources: at this rig an
+*Assisted Rotary Joint (ARJ_24_Gen2)* on port 3 sits next to the *LED Driver* on port 4. With
+`Port` empty, `connect` keeps only the listed names that match `DeviceNamePattern` (default
+`'LED'`, case-sensitive, so `LED Driver` and `LEDFLS_465_465` match and the rotary joint does not)
+and opens that one device. No match errors `doric:LightSource:deviceNotFound` and more than one
+errors `doric:LightSource:portRequired`, both naming everything listed; nothing is opened in
+either case. An explicit `Port` bypasses the pattern. The chosen device is logged (`log()`) and
+reported in `DeviceName`/`Port`.
+
+```matlab
+led = doric.LightSource();                                  % auto: the one "LED" device
+led = doric.LightSource('DeviceNamePattern', 'LED|Laser');  % another naming, the user's choice
+led = doric.LightSource('Port', 4);                         % no matching at all
+```
 
 Timeout per request = the relevant library wait + `SettleMs` + `CommandTimeoutMs` (commands) or
 + `ConnectTimeoutMs` (`INIT`, `OPEN`).

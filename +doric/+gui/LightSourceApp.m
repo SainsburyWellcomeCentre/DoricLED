@@ -48,12 +48,19 @@ classdef LightSourceApp < handle
         Danger = [0.80 0.10 0.10]
         PendingColor = [1.00 0.96 0.78]
         DimColor = [0.55 0.55 0.55]
-        LiveIntervalS = 0.1            % live intensity throttle while dragging (about 10 Hz)
+        LiveIntervalS = 0.05           % live intensity throttle while dragging (about 20 Hz)
+        % Live intensity waits for the ack only. The library prints ls_send_current's text
+        % during the call (rig check 2026-09-17), and a 100 ms settle per step made drags queue
+        % up behind each other (rig check 2026-09-21); late text still reaches the log.
+        LiveSettleMs = 0
     end
 
     properties (Access = private)
         Listeners = {}
         LastLiveSend
+        LiveBusy = [false false]       % a live CURRENT is in flight on that channel
+        LiveQueued = {[], []}          % newest value waiting for it, [] when none
+        LogDirty = false
         LogLines = {}
         Visible = 'on'
         Closing = false
@@ -150,6 +157,7 @@ classdef LightSourceApp < handle
             if ~isempty(obj.AdvancedFigure) && isvalid(obj.AdvancedFigure)
                 obj.refreshAdvanced();
             end
+            obj.flushLog();
         end
 
         function saveConfigTo(obj, file)
@@ -194,8 +202,9 @@ classdef LightSourceApp < handle
                 'Padding', [0 0 0 0]);
             uilabel(top, 'Text', 'Port');
             c.Port = uidropdown(top, 'Items', {'Auto'}, 'Editable', 'on', 'Value', 'Auto', ...
-                'Tooltip', ['Doric port number. Auto uses the only listed device. Type a ' ...
-                'number or pick one after Scan.']);
+                'Tooltip', ['Doric port number. Auto uses the one listed device whose name ' ...
+                'matches DeviceNamePattern (default ''LED''), so a rotary joint on the same ' ...
+                'PC is skipped. Type a number or pick one after Scan.']);
             c.Scan = uibutton(top, 'Text', 'Scan', 'ButtonPushedFcn', @(~, ~) obj.onScan(), ...
                 'Tooltip', 'List Doric devices (init, list, quit; opens nothing)');
             c.Connect = uibutton(top, 'Text', 'Connect', ...
@@ -217,7 +226,7 @@ classdef LightSourceApp < handle
                 c.Slider(k) = uislider(row, 'Limits', [0 doric.Channel.DeviceMaxCurrentmA], ...
                     'MajorTicks', [], 'MinorTicks', [], ...
                     'ValueChangingFcn', @(~, evt) obj.onIntensityChanging(k, evt.Value), ...
-                    'ValueChangedFcn', @(src, ~) obj.onIntensity(k, src.Value), ...
+                    'ValueChangedFcn', @(src, ~) obj.onSlider(k, src.Value), ...
                     'Tooltip', 'Intensity (mA); range follows MaxCurrentmA');
                 % The box stops at the LED's rating, so an over-rating value cannot even be typed.
                 c.Intensity(k) = uieditfield(row, 'numeric', ...
@@ -242,7 +251,8 @@ classdef LightSourceApp < handle
                 'ColumnWidth', {120, 70, 70, 70, 110, '1x'}, 'Padding', [0 0 0 0]);
             uilabel(actions, 'Text', 'Selected channels:');
             c.Apply = uibutton(actions, 'Text', 'Apply', 'ButtonPushedFcn', @(~, ~) obj.onApply(), ...
-                'Tooltip', 'Send the pending settings of the selected channels');
+                'Tooltip', ['Send the pending settings of the selected channels. A running ' ...
+                'channel is restarted so they take effect; a stopped one stays off until Start.']);
             c.Start = uibutton(actions, 'Text', 'Start', 'ButtonPushedFcn', @(~, ~) obj.onStart(), ...
                 'Tooltip', 'Apply pending changes (if any), then start the selected channels');
             c.Stop = uibutton(actions, 'Text', 'Stop', 'ButtonPushedFcn', @(~, ~) obj.onStop());
@@ -318,6 +328,9 @@ classdef LightSourceApp < handle
                 else
                     text = sprintf('Commanded: %s, %d mA, %s', char(ch.CommandedSettings.Mode), ...
                         ch.CommandedCurrentmA, lower(ch.CommandedState));
+                    if ~ch.IsRunning
+                        text = [text ' - press Start to turn on']; %#ok<AGROW>
+                    end
                 end
                 if pending && ~isempty(ch.CommandedSettings)
                     text = [text '  (pending changes)']; %#ok<AGROW>
@@ -420,9 +433,20 @@ classdef LightSourceApp < handle
         function onIntensityChanging(obj, k, value)
             value = round(value);
             obj.Controls.Intensity(k).Value = value;
+            % Keep the pending value in step with the thumb, so a refresh triggered by a reply
+            % mid-drag does not throw the slider back to the old value.
+            if value <= obj.LightSource.Channels(k).MaxCurrentmA
+                obj.guard(@() obj.setPending(k, 'CurrentmA', value));
+            end
             if obj.liveActive(k) && toc(obj.LastLiveSend{k}) >= obj.LiveIntervalS
                 obj.sendLive(k, value);
             end
+        end
+
+        function onSlider(obj, k, value)
+        % A slider position is continuous; snapping it to the nearest mA is the slider's
+        % resolution, not a clamp. The typed box still refuses a fractional value.
+            obj.onIntensity(k, round(value));
         end
 
         function onIntensity(obj, k, value)
@@ -446,12 +470,41 @@ classdef LightSourceApp < handle
         end
 
         function sendLive(obj, k, value)
+        % At most one live CURRENT in flight per channel; while it is, only the newest value is
+        % kept and sent when it completes. Sending every step instead queues them in the bridge
+        % and the light lags the slider. A reply lost for 2 s no longer blocks live sends.
+            if obj.LiveBusy(k) && toc(obj.LastLiveSend{k}) < 2
+                obj.LiveQueued{k} = value;
+                return
+            end
+            obj.LiveQueued{k} = [];
+            ch = obj.LightSource.Channels(k);
+            if ~obj.LiveBusy(k) && isequal(ch.CommandedCurrentmA, value)
+                return
+            end
             obj.LastLiveSend{k} = tic;
-            obj.guard(@() obj.LightSource.Channels(k).setCurrent(value, 'Wait', false));
+            obj.LiveBusy(k) = true;
+            if ~obj.guard(@() ch.setCurrent(value, 'Wait', false, ...
+                    'SettleMs', obj.LiveSettleMs, 'OnDone', @(~) obj.onLiveDone(k)))
+                obj.LiveBusy(k) = false;
+            end
+        end
+
+        function onLiveDone(obj, k)
+            if ~isvalid(obj)
+                return
+            end
+            obj.LiveBusy(k) = false;
+            value = obj.LiveQueued{k};
+            obj.LiveQueued{k} = [];
+            if ~isempty(value) && obj.liveActive(k)
+                obj.sendLive(k, value);
+            end
         end
 
         function onApply(obj)
             for k = obj.selectedChannels()
+                % Channel.apply restarts a running channel so the new settings take effect.
                 obj.guard(@() obj.LightSource.Channels(k).apply('Wait', false));
             end
             obj.refresh();
@@ -462,7 +515,7 @@ classdef LightSourceApp < handle
                 ch = obj.LightSource.Channels(k);
                 if isempty(ch.CommandedSettings) || ~isequal(ch.Settings, ch.CommandedSettings)
                     % Wait for the settings so a refused apply never starts old settings.
-                    if ~obj.guard(@() ch.apply('Wait', true))
+                    if ~obj.guard(@() ch.apply('Wait', true, 'Restart', false))
                         continue
                     end
                 end
@@ -499,7 +552,13 @@ classdef LightSourceApp < handle
                             obj.channelSuffix(evt.Channel), evt.Message));
                     end
                 case 'LibraryMessage'
-                    obj.appendLog(sprintf('Library (%s): %s', evt.Severity, evt.Text));
+                    % One settings echo is ~30 lines; redrawing the window for each one froze
+                    % it. Info lines wait for the next refresh, which follows with the reply.
+                    obj.appendLog(sprintf('Library (%s): %s', evt.Severity, evt.Text), ...
+                        strcmp(evt.Severity, 'info'));
+                    if strcmp(evt.Severity, 'info')
+                        return
+                    end
                 case 'Faulted'
                     obj.showError(['Faulted: ' evt.Reason]);
             end
@@ -858,18 +917,28 @@ classdef LightSourceApp < handle
             end
         end
 
-        function appendLog(obj, text)
+        function appendLog(obj, text, deferred)
+        % deferred: keep the line and show it at the next refresh (or flushLog).
             stamp = char(datetime('now', 'Format', 'HH:mm:ss.SSS'));
             obj.LogLines{end + 1} = sprintf('%s  %s', stamp, text);
             if numel(obj.LogLines) > 200
                 obj.LogLines = obj.LogLines(end - 199:end);
             end
-            if ~isempty(obj.Figure) && isvalid(obj.Figure)
-                obj.Controls.Log.Value = obj.LogLines;
-                try
-                    scroll(obj.Controls.Log, 'bottom');
-                catch
-                end
+            obj.LogDirty = true;
+            if nargin < 3 || ~deferred
+                obj.flushLog();
+            end
+        end
+
+        function flushLog(obj)
+            if ~obj.LogDirty || isempty(obj.Figure) || ~isvalid(obj.Figure)
+                return
+            end
+            obj.LogDirty = false;
+            obj.Controls.Log.Value = obj.LogLines;
+            try
+                scroll(obj.Controls.Log, 'bottom');
+            catch
             end
         end
 

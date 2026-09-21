@@ -274,6 +274,11 @@ Consequences for the package, all in `doric.Channel`:
   it (`doric:Channel:aboveDeviceLimit`), and every current that gets sent is checked against
   `MaxCurrentmA`, so no mode — CW, Square, Complex segments, Custom points or `setCurrent` —
   can exceed the LED's rating.
+- **Different light source, different cap.** Every figure above is for the 465 nm LEDFLS. For
+  another Doric LED head, a laser or another driver, the developer must look up that device's
+  rating and change `DeviceMaxCurrentmA` (and `RecommendedMaxCurrentmA`) in `+doric/Channel.m`
+  to match. It can be changed, with caution; any damage that follows is the responsibility of
+  whoever changed it.
 - `RecommendedMaxCurrentmA = 700` is the default limit, so the safe value is what you get
   without doing anything.
 - Operating outside the manual's stated conditions also voids the 12-month warranty (§6.2).

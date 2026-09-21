@@ -36,6 +36,15 @@ one watched the fiber. Worth confirming once, with a power meter or photodiode o
 Port 4 was identical across nine `init`/`list` runs in one session. Still to check: the number
 after unplugging and replugging the USB cable, and after a host reboot.
 
+### 2b. Auto port with the rotary joint attached (added 2026-09-21)
+
+With the Assisted Rotary Joint plugged in, the operator saw the listing
+`Assisted Rotary Joint (ARJ_24_Gen2) on port 3, LED Driver on port 4` and Auto refused to pick.
+Auto now opens the one listed name matching `DeviceNamePattern` (default `'LED'`); tested on
+`SimulatedTransport` with those exact names. Still to confirm at the rig: `doric.app()` →
+*Connect* with Port on *Auto* and the rotary joint attached reaches *Ready - LED Driver on port 4*,
+and the rotary joint is untouched.
+
 ### 3. The device's real maximum current — **resolved from the vendor manual (2026-09-17)**
 
 A 465 nm head is rated **1000 mA**, with **700 mA** recommended (Doric *LED Light Source* user
